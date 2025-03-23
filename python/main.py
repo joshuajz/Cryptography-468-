@@ -3,7 +3,7 @@ import socket
 import time
 import threading
 
-SERVICE_TYPE = "_pingpython._tcp.local."
+SERVICE_TYPE = "_ping._tcp.local."
 SERVICE_NAME = "Python._ping._tcp.local."
 SERVICE_PORT = 12345
 
@@ -61,8 +61,9 @@ def main():
         SERVICE_NAME,
         addresses=[socket.inet_aton(ip)],
         port=SERVICE_PORT,
-        server=socket.gethostname() + ".local.",
+        properties={}
     )
+
     zeroconf.register_service(info)
     print(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
 
