@@ -1,7 +1,7 @@
 import socket
 
-target_ip = "10.216.23.252"   # Replace with the Go machine's IP
-target_port = 12345
+target_ip = "10.216.23.252"
+target_port = 12346
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 message = b"Ping from Python!!!!!!! WOOO"

@@ -24,7 +24,7 @@ func main() {
 		"GoPeer",     // Name
 		"_ping._tcp", // Service type
 		"local.",     // Domain
-		12345,        // Port
+		12346,        // Port
 		[]string{},   // No TXT records
 		nil,          // Use system IP
 	)
@@ -40,7 +40,7 @@ func main() {
 	go func() {
 		// Find the address
 		addr := net.UDPAddr{
-			Port: 12345,
+			Port: 12346,
 			IP:   net.ParseIP("0.0.0.0"),
 		}
 
