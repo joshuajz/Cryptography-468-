@@ -16,9 +16,10 @@ def udp_listener(port=SERVICE_PORT):
     
     print(f"Listening for UDP messages on port {port}...")
     
-    # Listen for the message, and receive it in 1024 increments
+    # Listen for the message, and receive it in 4096 increments
     while True:
-        data, addr = sock.recvfrom(1024)
+        data, addr = sock.recvfrom(4096)
+        print("Raw Data:", data)
         print(f"Received from {addr}: {data.decode()}")
 
 def get_ip():

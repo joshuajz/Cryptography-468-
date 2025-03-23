@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -60,6 +62,42 @@ func main() {
 			}
 			fmt.Printf("Recieved from %s: %s\n", remoteAddr, string(buffer[:n]))
 		}
+	}()
+
+	// Discovery
+	go func() {
+		resolver, err := zeroconf.NewResolver(nil)
+		if err != nil {
+			log.Fatalln("Failed to initialize resolver:", err)
+		}
+
+		// Tracks all of the entries
+		entries := make(chan *zeroconf.ServiceEntry)
+		// Wait 10 seconds
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Print out the results
+		// Inline function
+		// It's like javascript!
+		go func(results <-chan *zeroconf.ServiceEntry) {
+			for entry := range results {
+				fmt.Printf("Discovered: %s\n", entry.Instance)
+				for _, ip := range entry.AddrIPv4 {
+					fmt.Printf("  IP: %s, Port: %d\n", ip, entry.Port)
+				}
+			}
+		}(entries)
+
+		log.Println("Looking for services of type _ping._tcp.local...")
+		err = resolver.Browse(ctx, "_ping._tcp", "local.", entries)
+		if err != nil {
+			log.Fatalln("Browse failed:", err)
+		}
+
+		// Determines when discovery is finished
+		<-ctx.Done()
+		log.Println("Discovery complete.")
 	}()
 
 	log.Println("Service registered as GoPeer._ping._tcp.local on port 12345")
