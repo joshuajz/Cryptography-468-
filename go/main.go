@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -91,7 +93,7 @@ func startFileReceiver(port int) {
 			log.Println("Error accepting connection:", err)
 			continue
 		}
-		// Asnyconously handle each file transfer
+		// Asynchronously handle each file transfer
 		// That way the entire program doesn't buffer when a file is sent
 		go handleFileTransfer(conn)
 	}
@@ -148,6 +150,46 @@ func handleFileTransfer(conn net.Conn) {
 	log.Printf("✅|Received file '%s' from %s\n", filename, conn.RemoteAddr().String())
 }
 
+func clearTerminal() {
+	// Had to find an ASCII code that will clear the terminal
+	fmt.Print("\033[H\033[2J")
+}
+
+func discoverServices() {
+	// Create a new Zeroconf service resolver
+	resolver, err := zeroconf.NewResolver(nil)
+	if err != nil {
+		log.Fatal("Failed to create resolver: ", err)
+	}
+
+	// Clears terminal
+	clearTerminal()
+
+	// Discover all _ping._tcp. peers
+	serviceType := "_ping._tcp." // Match the service type advertised by Python and Go peers
+
+	// Create a context to pass to the resolver
+	ctx := context.Background()
+
+	// Start the service resolution in the background
+	entries := make(chan *zeroconf.ServiceEntry)
+
+	go func() {
+		// Discover services of type "_ping._tcp" on my computer
+		if err := resolver.Browse(ctx, serviceType, "", entries); err != nil {
+			log.Fatal("Error starting service browse: ", err)
+		}
+		fmt.Printf("Peers:\n")
+
+		index := 0
+		// Listen for discovered services and print their details
+		for entry := range entries {
+			fmt.Printf("[%d] %s at %s:%d\n", index, entry.HostName, entry.AddrIPv4[0], entry.Port)
+			index++
+		}
+	}()
+}
+
 func main() {
 	// Shutdown handling
 	sig := make(chan os.Signal, 1)
@@ -161,10 +203,26 @@ func main() {
 	defer server.Shutdown()
 
 	// Start listening for incoming file transfers
-	startFileReceiver(servicePort)
+	go startFileReceiver(servicePort)
 
-	// Log info and wait for shutdown signal
-	log.Println("Go MDMS peer running. Press Ctrl+C to stop.")
-	<-sig
-	log.Println("Shutting down...")
+	// Re-run the searcher every 10 seconds
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Run initial discovery and periodic discovery
+	discoverServices()
+
+	// Keep the program running and perform service discovery at the interval
+	for {
+		select {
+		case <-ticker.C:
+			// Re-run service discovery every 10 seconds
+			fmt.Println("Re-running service discovery...")
+			discoverServices()
+		case <-sig:
+			// Handle shutdown signal
+			log.Println("Shutting down...")
+			return
+		}
+	}
 }

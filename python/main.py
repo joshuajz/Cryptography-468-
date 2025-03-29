@@ -109,15 +109,18 @@ def main():
     try:
         while True:
             # displays known peers and gives prompt to send files to specific users.
-            print("\nKnown peers:")
+            os.system('cls')
+            print("Peers:")
+            
             peers = list(listener.peers)
+            
             for i, (name, peer_ip, peer_port) in enumerate(peers):
                 print(f"[{i}] {name} at {peer_ip}:{peer_port}")
 
             if peers:
                 # input system for sending files. 
                 # select file and user to send file to
-                choice = input("Send file to which peer? Enter number or 'n' to skip: ").strip()
+                choice = input("Send file to which peer? Enter number or 'r' to refresh: ").strip()
                 if choice.isdigit():
                     idx = int(choice)
                     if 0 <= idx < len(peers):
@@ -125,7 +128,6 @@ def main():
                         peer = peers[idx]
                         print('Sending to peer|:', peer[1], peer[2], filename)
                         send_file(peer[1], peer[2], filename)
-            time.sleep(10)
     except KeyboardInterrupt:
         # shuts down with keyboard interrupt
         print("Shutting down...")
