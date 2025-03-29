@@ -23,6 +23,8 @@ const (
 	servicePort   = 12346
 )
 
+var MESSAGE_BUFFER []string // Message buffer to store logs
+
 func getLocalIP() (string, error) {
 	// List of network interfaces
 	interfaces, err := net.Interfaces()
@@ -31,13 +33,10 @@ func getLocalIP() (string, error) {
 	}
 
 	// Loop through interfaces to find an IPv4 address
-	// We'll use that address for our communications
-	// This was a mix-mash of a ton of functions that did this to varying degrees
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagUp != 0 && !strings.Contains(iface.Name, "loopback") {
 			addrs, err := iface.Addrs()
 			if err != nil {
-				// if an error occurs
 				continue
 			}
 
@@ -94,15 +93,12 @@ func startFileReceiver(port int) {
 			continue
 		}
 		// Asynchronously handle each file transfer
-		// That way the entire program doesn't buffer when a file is sent
 		go handleFileTransfer(conn)
 	}
 }
 
 func handleFileTransfer(conn net.Conn) {
 	// Handles collecting file data, and saving it to a file
-
-	// Close the connection later
 	defer conn.Close()
 	log.Println("Connection established with", conn.RemoteAddr())
 
@@ -127,10 +123,9 @@ func handleFileTransfer(conn net.Conn) {
 	filename := fileParts[0]
 	filedata := []byte(fileParts[1]) // Content after name
 
-	log.Printf("Received file: %s", filename)
+	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("Received file: %s", filename))
 
 	// Create the file to save the data
-	// Using a "recieved_" value to make it obvious
 	f, err := os.Create("received_" + filename)
 	if err != nil {
 		log.Println("Failed to create file:", err)
@@ -146,12 +141,11 @@ func handleFileTransfer(conn net.Conn) {
 	}
 
 	// Log success and close the connection
-	// I like emojis now :]
-	log.Printf("✅|Received file '%s' from %s\n", filename, conn.RemoteAddr().String())
+	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String()))
 }
 
 func clearTerminal() {
-	// Had to find an ASCII code that will clear the terminal
+	// ANSI escape code to clear the terminal
 	fmt.Print("\033[H\033[2J")
 }
 
@@ -161,9 +155,6 @@ func discoverServices() {
 	if err != nil {
 		log.Fatal("Failed to create resolver: ", err)
 	}
-
-	// Clears terminal
-	clearTerminal()
 
 	// Discover all _ping._tcp. peers
 	serviceType := "_ping._tcp." // Match the service type advertised by Python and Go peers
@@ -217,8 +208,15 @@ func main() {
 		select {
 		case <-ticker.C:
 			// Re-run service discovery every 10 seconds
-			fmt.Println("Re-running service discovery...")
+			clearTerminal()
 			discoverServices()
+
+			// Print message buffer
+			fmt.Println("\nLogs:")
+			for _, msg := range MESSAGE_BUFFER {
+				fmt.Println(msg)
+			}
+			fmt.Println("\n")
 		case <-sig:
 			// Handle shutdown signal
 			log.Println("Shutting down...")
