@@ -23,7 +23,7 @@ const (
 	servicePort   = 12346
 )
 
-var MESSAGE_BUFFER []string // Message buffer to store logs
+var peers []map[string]interface{} // List of dictionaries (maps) to store peer information
 
 func getLocalIP() (string, error) {
 	// List of network interfaces
@@ -123,8 +123,6 @@ func handleFileTransfer(conn net.Conn) {
 	filename := fileParts[0]
 	filedata := []byte(fileParts[1]) // Content after name
 
-	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("Received file: %s", filename))
-
 	// Create the file to save the data
 	f, err := os.Create("received_" + filename)
 	if err != nil {
@@ -141,12 +139,7 @@ func handleFileTransfer(conn net.Conn) {
 	}
 
 	// Log success and close the connection
-	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String()))
-}
-
-func clearTerminal() {
-	// ANSI escape code to clear the terminal
-	fmt.Print("\033[H\033[2J")
+	log.Printf("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String())
 }
 
 func discoverServices() {
@@ -165,20 +158,74 @@ func discoverServices() {
 	// Start the service resolution in the background
 	entries := make(chan *zeroconf.ServiceEntry)
 
-	go func() {
-		// Discover services of type "_ping._tcp" on my computer
-		if err := resolver.Browse(ctx, serviceType, "", entries); err != nil {
-			log.Fatal("Error starting service browse: ", err)
-		}
-		fmt.Printf("Peers:\n")
+	// Reset the peers list before starting a new discovery cycle
+	peers = []map[string]interface{}{}
 
-		index := 0
-		// Listen for discovered services and print their details
-		for entry := range entries {
-			fmt.Printf("[%d] %s at %s:%d\n", index, entry.HostName, entry.AddrIPv4[0], entry.Port)
+	// Discover services of type "_ping._tcp" on my computer (synchronously now)
+	err = resolver.Browse(ctx, serviceType, "", entries)
+	if err != nil {
+		log.Fatal("Error starting service browse: ", err)
+	}
+
+	// Timeout mechanism to stop waiting if no peers are found within 10 seconds
+	timeout := time.After(10 * time.Second)
+
+	fmt.Println("Peers:")
+	index := 0
+
+	// Process the entries from the channel or timeout
+	for {
+		select {
+		case entry := <-entries:
+			// Service discovered, add to the list
+			peer := map[string]interface{}{
+				"Name": entry.Service,
+				"IP":   entry.AddrIPv4[0].String(),
+				"Port": entry.Port,
+			}
+			peers = append(peers, peer)
+			fmt.Printf("[%d] %s at %s:%d\n", index, entry.Service, entry.AddrIPv4[0], entry.Port)
 			index++
+
+		case <-timeout:
+			// Timeout reached, stop waiting for services
+			fmt.Println("Timeout reached, finishing discovery.")
+			fmt.Println("Finish printing all of the peers")
+			close(entries) // Close the entries channel to stop the loop
+			return
 		}
-	}()
+	}
+}
+
+func sendFile(peerIP string, peerPort int, filename string) {
+	// Open the file
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Printf("❌File '%s' not found", filename)
+		return
+	}
+	defer file.Close()
+
+	// Connect
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", peerIP, peerPort))
+	if err != nil {
+		log.Printf("❌Could not connect to peer at %s:%d", peerIP, peerPort)
+		return
+	}
+	defer conn.Close()
+
+	// Send the filename and file data
+	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", filename)))
+	if err != nil {
+		log.Printf("❌ Failed to send filename")
+		return
+	}
+	_, err = io.Copy(conn, file)
+	if err != nil {
+		log.Printf("❌ Failed to send file data")
+		return
+	}
+	log.Printf("✅ Sent file '%s' to %s:%d", filename, peerIP, peerPort)
 }
 
 func main() {
@@ -200,27 +247,24 @@ func main() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
-	// Run initial discovery and periodic discovery
+	// Discover services
 	discoverServices()
+	fmt.Print("HELLLLO")
 
-	// Keep the program running and perform service discovery at the interval
-	for {
-		select {
-		case <-ticker.C:
-			// Re-run service discovery every 10 seconds
-			clearTerminal()
-			discoverServices()
-
-			// Print message buffer
-			fmt.Println("\nLogs:")
-			for _, msg := range MESSAGE_BUFFER {
-				fmt.Println(msg)
-			}
-			fmt.Println("\n")
-		case <-sig:
-			// Handle shutdown signal
-			log.Println("Shutting down...")
-			return
-		}
+	// Allow user to select a peer and send a file
+	choice := -1
+	fmt.Print("\nSelect a peer to send a file to (enter number): ")
+	fmt.Scan(&choice)
+	if choice >= 0 && choice < len(peers) {
+		peer := peers[choice]
+		peerIP := peer["IP"].(string)
+		peerPort := peer["Port"].(int)
+		fmt.Printf("Enter the filename to send to %s:%d: ", peerIP, peerPort)
+		var filename string
+		fmt.Scan(&filename)
+		sendFile(peerIP, peerPort, filename)
+	} else {
+		log.Println("❌ Invalid peer selection")
 	}
+
 }
