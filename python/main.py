@@ -148,18 +148,18 @@ class Listener:
         self.peers = set()
         self.messages = []  # List to store messages for displaying
 
-    def add_service(self, zeroconf, type, name):
-        # Displays discovered IPs using mDNS through zeroconf
-        info = zeroconf.get_service_info(type, name)
+    def add_service(self, zeroconf, service_type, service_name):
+        # Adds the discovered service to the peer list
+        info = zeroconf.get_service_info(service_type, service_name)
         if info:
             ip = socket.inet_ntoa(info.addresses[0])
-            self.peers.add((name, ip, info.port))
-            self.messages.append(f"Discovered service: {name} at {ip}:{info.port}")
+            self.peers.add((service_name, ip, info.port))
+            self.messages.append(f"Discovered service: {service_name} at {ip}:{info.port}")
 
-    # def remove_service(self, zeroconf, type, name):
-    #     # removes a discovered IP from display
-    #     self.messages.append(f"Peer removed: {name}")
-    #     self.peers = {peer for peer in self.peers if peer[0] != name}
+    def remove_service(self, zeroconf, service_type, service_name):
+        # Removes a discovered IP from the list
+        self.messages.append(f"Peer removed: {service_name}")
+        self.peers = {peer for peer in self.peers if peer[0] != service_name}
 
 def send_file(ip, port, filename):
     try:
