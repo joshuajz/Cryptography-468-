@@ -99,7 +99,7 @@ def main():
     )
     # Register an mDNS service with the info we have defined
     zeroconf.register_service(info)
-    MESSAGE_BUFFER.append(f"Registered {service_name} on {ip}:{SERVICE_PORT}")
+    MESSAGE_BUFFER.append(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
 
     # Starts TCP listener
     threading.Thread(target=tcp_listener, args=(SERVICE_PORT,), daemon=True).start()
