@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
+	"golang.org/x/crypto/scrypt"
 )
 
 const (
@@ -29,7 +31,7 @@ const (
 var (
 	MESSAGE_BUFFER []string
 
-	// Predefined DH parameters (RFC 3526 - 2048-bit MODP Group)
+	// Predefined DH parameters
 	p, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
 		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
 		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
@@ -101,6 +103,23 @@ func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
 	return hash[:]
 }
 
+// deriveKey derives a cryptographic key from the shared secret using scrypt
+func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
+	// Generate a random salt (16 bytes)
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Derive a 32-byte key using scrypt
+	key, err := scrypt.Key(sharedSecret, salt, 16384, 8, 1, 32)
+	if err != nil {
+		return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
+	}
+
+	return key, salt, nil
+}
+
 func startFileReceiver(port int) {
 	// Receive files on port
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port)) // Binding to all interfaces
@@ -129,19 +148,52 @@ func handleConnection(conn net.Conn) {
 	myPriv, myPub := generateDHKeyPair()
 	conn.Write(myPub.Bytes())
 
+	response := map[string]string{
+		"public_key": myPub.Text(16), // Send key as a hexadecimal string
+	}
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		log.Println("Error encoding JSON:", err)
+		return
+	}
+
+	// Send JSON to client
+	_, err = conn.Write(jsonData)
+	if err != nil {
+		log.Println("Error sending JSON:", err)
+		return
+	}
+	log.Println("Sent JSON:", string(jsonData)) // Debugging output
+
 	theirPubBytes := make([]byte, 256)
-	_, err := conn.Read(theirPubBytes)
+	n, err := conn.Read(theirPubBytes)
 	if err != nil {
 		log.Println("Failed to receive peer public key:", err)
 		return
 	}
+
+	// Parse JSON from client
+	var clientData map[string]string
+	err = json.Unmarshal(theirPubBytes[:n], &clientData)
+	if err != nil {
+		log.Println("Failed to parse JSON:", err)
+		return
+	}
 	theirPub := new(big.Int).SetBytes(theirPubBytes)
-	_ = computeSharedSecret(theirPub, myPriv) //change to sharedKey := ....
-	log.Printf("Shared secret established with %s\n", conn.RemoteAddr())
+	sharedSecret := computeSharedSecret(theirPub, myPriv)
+
+	key, salt, err := deriveKey(sharedSecret)
+	if err != nil {
+		log.Println("Failed to derive key:", err)
+		return
+	}
+	log.Printf("Derived key: %x\n", key)
+	log.Printf("Using salt: %x\n", salt)
+	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
 
 	// File transfer
 	buffer := make([]byte, 4096)
-	n, err := conn.Read(buffer)
+	n, err = conn.Read(buffer)
 	if err != nil && err != io.EOF {
 		log.Println("Failed to read file data:", err)
 		return

@@ -3,24 +3,39 @@
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 import socket
 import threading
+import json
 import time
 import os
 
 # libraries for cryptography specifically 
 import random
+import hmac
+import hashlib
 from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
 from Crypto.PublicKey import RSA
 from Crypto.Hash import HMAC, SHA256
+from Crypto.Random.random import getrandbits
 from hashlib import sha256
 from Crypto.Random import get_random_bytes
 from Crypto.Protocol.KDF import scrypt
+from Crypto.Util.number import getPrime, inverse
 
-# DHKE Parameters (using some small values for simplicity)
-p = 23  # Prime modulus (using a small prime for illustration)
-g = 5   # Generator (primitive root mod p)
-private_key = random.randint(2, p - 2)  # Private key for this node
-public_key = pow(g, private_key, p)  # Public key (g^a mod p)
+def generate_dh_keypair():
+    # Standard 2048-bit safe prime for DHKE (can be changed to a larger prime if needed)
+    p = int("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
+            "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
+            "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"
+            "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+            "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"
+            "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"
+            "83655D23DCA3AD961C62F356208552BB9ED529077096966D"
+            "670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
+    g = 2
+    private_key = getrandbits(2048) % p
+    public_key = pow(g, private_key, p)
+    return p, g, private_key, public_key
 
 # define port number, service type, and service name
 SERVICE_TYPE = "_ping._tcp.local."
@@ -28,16 +43,14 @@ SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
 MESSAGE_BUFFER = []
 
-def generate_shared_secret(peer_public_key):
-    # Compute the shared secret (g^ab mod p) where `peer_public_key` is the peer's public key
-    shared_secret = pow(peer_public_key, private_key, p)
-    return shared_secret
+def compute_shared_secret(peer_public_key, private_key, p):
+    return pow(peer_public_key, private_key, p)
 
 def derive_key(shared_secret):
     # Derive a key using the shared secret and scrypt (instead of PBKDF2)
     salt = get_random_bytes(16)  # Random salt
-    key = scrypt(str(shared_secret).encode(), salt, dklen=32, N=2**14, r=8, p=1)
-    return key
+    key = scrypt(str(shared_secret).encode(), salt, 2**14, 8, 1, 32)
+    return key, salt
 
 def calculate_hmac(key, data):
     # Calculate HMAC using SHA256
@@ -168,8 +181,8 @@ def send_file(ip, port, filename):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((ip, port))
 
-            # Derive a shared secret (for illustration, we assume it's pre-calculated or exchanged)
-            shared_secret = int(input("Enter shared secret: "))  # Example input from DHKE
+            # Derive a shared secret 
+            shared_secret = int(input("Enter shared secret: "))  # do we need this? they should send shared keys rather than type them in
 
             encryption_key = derive_key(shared_secret)
 
@@ -202,13 +215,16 @@ def main():
     # register an mDNS service with the info we have defined
     zeroconf.register_service(info)
     MESSAGE_BUFFER.append(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
+
+
     
+
     # starts TCP listener 
     threading.Thread(target=tcp_listener, args=(SERVICE_PORT,), daemon=True).start()
 
     listener = Listener()
     browser = ServiceBrowser(zeroconf, SERVICE_TYPE, listener)
-
+  
     try:
         while True:
             # Display buffered messages before clearing the terminal
@@ -237,6 +253,21 @@ def main():
                 if choice.isdigit():
                     idx = int(choice)
                     if 0 <= idx < len(peers):
+
+                        peer_ip, peer_port = peers[idx][1], peers[idx][2]  # Get the chosen peer's IP and port
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.connect((peer_ip, peer_port))  # <-- Connect to the peer
+                        p, g, private_key, public_key = generate_dh_keypair()
+                
+                     
+                        sock.sendall(json.dumps({'p': p, 'g': g, 'public_key': public_key}).encode())
+                        server_data = json.loads(sock.recv(4096).decode())
+                        server_public_key = int(server_data['public_key'])
+                        shared_secret = compute_shared_secret(server_public_key, private_key, p)
+                        symmetric_key = derive_key(shared_secret)
+                        print(f"Derived symmetric key: {symmetric_key.hex()}")
+
+
                         filename = input("Enter the filename to send: ").strip()
                         peer = peers[idx]
                         MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
