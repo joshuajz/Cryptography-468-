@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"os/signal"
@@ -23,7 +26,16 @@ const (
 	servicePort   = 12346
 )
 
-var MESSAGE_BUFFER []string // Message buffer to store logs
+var (
+	MESSAGE_BUFFER []string
+
+	// Predefined DH parameters (RFC 3526 - 2048-bit MODP Group)
+	p, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
+		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
+		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
+		"E485B576625E7EC6F44C42E9A63A3620FFFFFFFFFFFFFFFF", 16)
+	g = big.NewInt(2)
+) // Message buffer to store logs and predefined DH parameters
 
 func getLocalIP() (string, error) {
 	// List of network interfaces
@@ -77,6 +89,18 @@ func startResponder() (*zeroconf.Server, error) {
 	return server, nil
 }
 
+func generateDHKeyPair() (*big.Int, *big.Int) {
+	priv, _ := rand.Int(rand.Reader, p)
+	pub := new(big.Int).Exp(g, priv, p)
+	return priv, pub
+}
+
+func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
+	shared := new(big.Int).Exp(theirPub, myPriv, p)
+	hash := sha256.Sum256(shared.Bytes())
+	return hash[:]
+}
+
 func startFileReceiver(port int) {
 	// Receive files on port
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port)) // Binding to all interfaces
@@ -93,54 +117,55 @@ func startFileReceiver(port int) {
 			continue
 		}
 		// Asynchronously handle each file transfer
-		go handleFileTransfer(conn)
+		go handleConnection(conn)
 	}
 }
 
-func handleFileTransfer(conn net.Conn) {
-	// Handles collecting file data, and saving it to a file
+func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	log.Println("Connection established with", conn.RemoteAddr())
 
-	// Read file data, maximum of 4096 bytes
-	buffer := make([]byte, 4096)
+	// Diffie-Hellman Key Exchange
+	myPriv, myPub := generateDHKeyPair()
+	conn.Write(myPub.Bytes())
 
-	// Read the filename
-	n, err := conn.Read(buffer)
-	if err != nil && err != io.EOF {
-		log.Println("Failed to read from connection:", err)
+	theirPubBytes := make([]byte, 256)
+	_, err := conn.Read(theirPubBytes)
+	if err != nil {
+		log.Println("Failed to receive peer public key:", err)
 		return
 	}
+	theirPub := new(big.Int).SetBytes(theirPubBytes)
+	_ = computeSharedSecret(theirPub, myPriv) //change to sharedKey := ....
+	log.Printf("Shared secret established with %s\n", conn.RemoteAddr())
 
-	// Split into filename + other data
+	// File transfer
+	buffer := make([]byte, 4096)
+	n, err := conn.Read(buffer)
+	if err != nil && err != io.EOF {
+		log.Println("Failed to read file data:", err)
+		return
+	}
 	parts := string(buffer[:n])
 	fileParts := strings.SplitN(parts, "\n", 2)
 	if len(fileParts) < 2 {
 		log.Println("Invalid file format")
 		return
 	}
-
 	filename := fileParts[0]
-	filedata := []byte(fileParts[1]) // Content after name
-
+	filedata := []byte(fileParts[1])
 	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("Received file: %s", filename))
-
-	// Create the file to save the data
 	f, err := os.Create("received_" + filename)
 	if err != nil {
 		log.Println("Failed to create file:", err)
 		return
 	}
 	defer f.Close()
-
-	// Write the file data
 	_, err = f.Write(filedata)
 	if err != nil {
 		log.Println("Failed to write file:", err)
 		return
 	}
-
-	// Log success and close the connection
 	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String()))
 }
 

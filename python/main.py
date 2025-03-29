@@ -1,14 +1,102 @@
+
+# libraries for network connections
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 import socket
 import threading
 import time
 import os
 
+# libraries for cryptography specifically 
+import random
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.PublicKey import RSA
+from Crypto.Hash import HMAC, SHA256
+from hashlib import sha256
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import scrypt
+
+# DHKE Parameters (using some small values for simplicity)
+p = 23  # Prime modulus (using a small prime for illustration)
+g = 5   # Generator (primitive root mod p)
+private_key = random.randint(2, p - 2)  # Private key for this node
+public_key = pow(g, private_key, p)  # Public key (g^a mod p)
+
 # define port number, service type, and service name
 SERVICE_TYPE = "_ping._tcp.local."
 SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
 MESSAGE_BUFFER = []
+
+def generate_shared_secret(peer_public_key):
+    # Compute the shared secret (g^ab mod p) where `peer_public_key` is the peer's public key
+    shared_secret = pow(peer_public_key, private_key, p)
+    return shared_secret
+
+def derive_key(shared_secret):
+    # Derive a key using the shared secret and scrypt (instead of PBKDF2)
+    salt = get_random_bytes(16)  # Random salt
+    key = scrypt(str(shared_secret).encode(), salt, dklen=32, N=2**14, r=8, p=1)
+    return key
+
+def calculate_hmac(key, data):
+    # Calculate HMAC using SHA256
+    hmac_obj = HMAC.new(key, data, SHA256)
+    return hmac_obj.digest()
+
+def encrypt_file(key, filename):
+    salt = get_random_bytes(16)  # Generate a random salt
+    iv = get_random_bytes(AES.block_size)  # Generate a random IV
+    key = derive_key(key)  # Derive the encryption key from shared secret
+    
+    # Read the file to encrypt
+    with open(filename, 'rb') as f:
+        plaintext = f.read()
+    
+    # Encrypt the file using AES CBC
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
+    
+    # Generate HMAC of the ciphertext
+    hmac_tag = calculate_hmac(key, ciphertext)
+    
+    # Write encrypted file with salt, IV, HMAC, and ciphertext
+    with open(f'{filename}.enc', 'wb') as enc_file:
+        enc_file.write(salt)
+        enc_file.write(iv)
+        enc_file.write(hmac_tag)
+        enc_file.write(ciphertext)
+    
+    print(f"Encrypted file saved as {filename}.enc")
+
+def decrypt_file(key, filename):
+    with open(filename, 'rb') as f:
+        data = f.read()
+    
+    salt = data[:16]  # Extract salt
+    iv = data[16:32]  # Extract IV
+    hmac_tag = data[32:64]  # Extract HMAC tag
+    ciphertext = data[64:]  # Extract ciphertext
+    
+    # Derive key from shared secret
+    key = derive_key(key)
+    
+    # Verify HMAC tag
+    if hmac_tag != calculate_hmac(key, ciphertext):
+        print("HMAC verification failed!")
+        return
+    
+    # Decrypt the file using AES CBC mode
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
+    
+    # Write decrypted file
+    with open(f'{filename[:-4]}.dec', 'wb') as dec_file:
+        dec_file.write(plaintext)
+    
+    print(f"Decrypted file saved as {filename[:-4]}.dec")
+
+
 
 def tcp_listener(port=SERVICE_PORT):
     # sets up tcp listening port
@@ -35,6 +123,12 @@ def tcp_listener(port=SERVICE_PORT):
                 filename = filename.decode()
                 with open(f"received_{filename}", "wb") as f:
                     f.write(filedata)
+
+                # Here we assume the shared secret was already derived using DHKE
+                shared_secret = int(input("Enter shared secret (received from peer): "))  # Example input
+                decryption_key = derive_key(shared_secret)
+                decrypt_file(decryption_key, f"received_{filename}.enc")
+                
                 MESSAGE_BUFFER.append(f"✅ Received file '{filename}' from {addr}")
 
 def get_ip():
@@ -62,26 +156,33 @@ class Listener:
             self.peers.add((name, ip, info.port))
             self.messages.append(f"Discovered service: {name} at {ip}:{info.port}")
 
-    def remove_service(self, zeroconf, type, name):
-        # removes a discovered IP from display
-        self.messages.append(f"Peer removed: {name}")
-        self.peers = {peer for peer in self.peers if peer[0] != name}
+    # def remove_service(self, zeroconf, type, name):
+    #     # removes a discovered IP from display
+    #     self.messages.append(f"Peer removed: {name}")
+    #     self.peers = {peer for peer in self.peers if peer[0] != name}
 
 def send_file(ip, port, filename):
     try:
-        with open(filename, "rb") as f:
-            # open file, connect to where you want to send it, send the encoded file name with the data
-            # display what file was sent and to which ip and port 
+          with open(filename, "rb") as f:
             file_data = f.read()
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            # connect to the peer you want to send file too. Send file. 
             sock.connect((ip, port))
-            sock.sendall(filename.encode() + b"\n" + file_data)
-            # close connection after file sent
+
+            # Derive a shared secret (for illustration, we assume it's pre-calculated or exchanged)
+            shared_secret = int(input("Enter shared secret: "))  # Example input from DHKE
+
+            encryption_key = derive_key(shared_secret)
+
+            # Encrypt the file before sending it
+            encrypt_file(encryption_key, filename)
+
+            # Read the encrypted file and send it
+            with open(f"{filename}.enc", "rb") as enc_file:
+                enc_file_data = enc_file.read()
+                sock.sendall(filename.encode() + b"\n" + enc_file_data)
             sock.close()
-            MESSAGE_BUFFER.append(f"✅ Sent file '{filename}' to {ip}:{port}")
+            MESSAGE_BUFFER.append(f"✅ Sent encrypted file '{filename}' to {ip}:{port}")
     except FileNotFoundError:
-        # displays error if file not found
         MESSAGE_BUFFER.append(f"❌ File '{filename}' not found.")
     except Exception as e:
         MESSAGE_BUFFER.append(f"❌ Error: {e}")
