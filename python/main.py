@@ -8,19 +8,20 @@ import os
 SERVICE_TYPE = "_ping._tcp.local."
 SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
+MESSAGE_BUFFER = []
 
 def tcp_listener(port=SERVICE_PORT):
     # sets up tcp listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
     sock.listen(1)
-    print(f"Listening for TCP file transfers on port {port}...")
+    MESSAGE_BUFFER.append(f"Listening for TCP file transfers on port {port}...")
 
     while True:
         # displays current connection and checks for file transfer
         conn, addr = sock.accept()
         with conn:
-            print(f"Connection from {addr}")
+            MESSAGE_BUFFER.append(f"Connection from {addr}")
             buffer = b""
             while True:
                 chunk = conn.recv(4096)
@@ -34,7 +35,7 @@ def tcp_listener(port=SERVICE_PORT):
                 filename = filename.decode()
                 with open(f"received_{filename}", "wb") as f:
                     f.write(filedata)
-                print(f"✅ Received file '{filename}' from {addr}")
+                MESSAGE_BUFFER.append(f"✅ Received file '{filename}' from {addr}")
 
 def get_ip():
     # get IP connections
@@ -51,6 +52,7 @@ class Listener:
     # listener class for listening ports 
     def __init__(self):
         self.peers = set()
+        self.messages = []  # List to store messages for displaying
 
     def add_service(self, zeroconf, type, name):
         # Displays discovered IPs using mDNS through zeroconf
@@ -58,11 +60,11 @@ class Listener:
         if info:
             ip = socket.inet_ntoa(info.addresses[0])
             self.peers.add((name, ip, info.port))
-            print(f"Discovered service: {name} at {ip}:{info.port}")
+            self.messages.append(f"Discovered service: {name} at {ip}:{info.port}")
 
     def remove_service(self, zeroconf, type, name):
         # removes a discovered IP from display
-        print(f"Peer removed: {name}")
+        self.messages.append(f"Peer removed: {name}")
         self.peers = {peer for peer in self.peers if peer[0] != name}
 
 def send_file(ip, port, filename):
@@ -77,12 +79,12 @@ def send_file(ip, port, filename):
             sock.sendall(filename.encode() + b"\n" + file_data)
             # close connection after file sent
             sock.close()
-            print(f"✅ Sent file '{filename}' to {ip}:{port}")
+            MESSAGE_BUFFER.append(f"✅ Sent file '{filename}' to {ip}:{port}")
     except FileNotFoundError:
         # displays error if file not found
-        print(f"❌ File '{filename}' not found.")
+        MESSAGE_BUFFER.append(f"❌ File '{filename}' not found.")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        MESSAGE_BUFFER.append(f"❌ Error: {e}")
 
 def main():
 
@@ -98,7 +100,7 @@ def main():
     )
     # register an mDNS service with the info we have defined
     zeroconf.register_service(info)
-    print(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
+    MESSAGE_BUFFER.append(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
     
     # starts TCP listener 
     threading.Thread(target=tcp_listener, args=(SERVICE_PORT,), daemon=True).start()
@@ -108,14 +110,24 @@ def main():
 
     try:
         while True:
-            # displays known peers and gives prompt to send files to specific users.
-            os.system('cls')
+            # Display buffered messages before clearing the terminal
+            os.system('cls' if os.name == 'nt' else 'clear')
             print("Peers:")
+            # for message in listener.messages:
+                # print(message)  # Print all messages stored in the buffer
+            
+            # listener.messages = []  # Clear messages after displaying them
             
             peers = list(listener.peers)
             
             for i, (name, peer_ip, peer_port) in enumerate(peers):
                 print(f"[{i}] {name} at {peer_ip}:{peer_port}")
+
+            print("\nLogs:")
+
+            for message in MESSAGE_BUFFER:
+                print(message)  # Print all messages stored in the buffer
+            print('\n')
 
             if peers:
                 # input system for sending files. 
@@ -126,8 +138,10 @@ def main():
                     if 0 <= idx < len(peers):
                         filename = input("Enter the filename to send: ").strip()
                         peer = peers[idx]
-                        print('Sending to peer|:', peer[1], peer[2], filename)
+                        MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
                         send_file(peer[1], peer[2], filename)
+            
+            
     except KeyboardInterrupt:
         # shuts down with keyboard interrupt
         print("Shutting down...")
