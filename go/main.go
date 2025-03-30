@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
@@ -37,6 +40,8 @@ var (
 		"E485B576625E7EC6F44C42E9A637A3620FFFFFFFFFFFFFFFF", 16)
 	g = big.NewInt(2)
 ) // Message buffer to store logs and predefined DH parameters
+
+var symmkeyGlobal []byte
 
 func getLocalIP() (string, error) {
 	// List of network interfaces
@@ -97,9 +102,11 @@ func generateDHKeyPair() (*big.Int, *big.Int) {
 }
 
 func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
+	// Calculate the shared secret using Diffie-Hellman
 	shared := new(big.Int).Exp(theirPub, myPriv, p)
-	hash := sha256.Sum256(shared.Bytes())
-	return hash[:]
+
+	// Return the raw bytes of the shared secret (no hashing)
+	return shared.Bytes()
 }
 
 // deriveKey derives a cryptographic key from the shared secret using scrypt
@@ -111,13 +118,158 @@ func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 	}
 
 	// Derive a 32-byte key using scrypt
-	key, err := scrypt.Key(sharedSecret, salt, 16384, 8, 1, 32)
+	key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
 	}
 
 	return key, salt, nil
 }
+
+// Encrypt file using AES and HMAC
+func encryptFile(key []byte, filename string) error {
+	// Generate random salt and IV for encryption
+	salt := make([]byte, 16)
+	iv := make([]byte, aes.BlockSize)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("failed to generate salt: %w", err)
+	}
+	if _, err := rand.Read(iv); err != nil {
+		return fmt.Errorf("failed to generate IV: %w", err)
+	}
+
+	// Read the file to be encrypted
+	plaintext, err := os.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Create AES cipher block and encrypt the plaintext
+	fmt.Print("\n\nkey before NewCipher is called", key, "\n")
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	// Pad the plaintext to ensure it fits in AES block size
+	plaintext = append(plaintext, make([]byte, aes.BlockSize-len(plaintext)%aes.BlockSize)...)
+
+	ciphertext := make([]byte, len(plaintext))
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext, plaintext)
+
+	// Calculate HMAC for the ciphertext
+	hmacHash := hmac.New(sha256.New, key)
+	hmacHash.Write(ciphertext)
+	hmacTag := hmacHash.Sum(nil)
+	fmt.Println("HMAC")
+
+	// Save the encrypted file with salt, IV, HMAC, and ciphertext
+	encFile := fmt.Sprintf("%s.enc", filename)
+	file, err := os.Create(encFile)
+	if err != nil {
+		return fmt.Errorf("failed to create encrypted file: %w", err)
+	}
+	defer file.Close()
+	fmt.Printf("FILE CREATED?")
+
+	_, err = file.Write(salt)
+	if err != nil {
+		return fmt.Errorf("failed to write salt: %w", err)
+	}
+
+	_, err = file.Write(iv)
+	if err != nil {
+		return fmt.Errorf("failed to write IV: %w", err)
+	}
+
+	_, err = file.Write(hmacTag)
+	if err != nil {
+		return fmt.Errorf("failed to write HMAC: %w", err)
+	}
+
+	_, err = file.Write(ciphertext)
+	if err != nil {
+		return fmt.Errorf("failed to write ciphertext: %w", err)
+	}
+
+	log.Printf("Encrypted file saved as %s\n", encFile)
+	return nil
+}
+
+// // decryptFile decrypts a file using the derived symmetric key and saves the decrypted content.
+// func decryptFile(symKey []byte, filename string) error {
+// 	// Read the encrypted file content
+// 	data, err := ioutil.ReadFile(filename)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	// Extract the components: salt, IV, HMAC tag, and ciphertext
+// 	iv := data[16:32]       // Extract IV (next 16 bytes)
+// 	hmacTag := data[32:64]  // Extract HMAC tag (next 32 bytes)
+// 	ciphertext := data[64:] // The remaining data is the ciphertext
+
+// 	// Verify the HMAC tag to ensure data integrity
+// 	if !verifyHMAC(symKey, ciphertext, hmacTag) {
+// 		return errors.New("HMAC verification failed")
+// 	}
+
+// 	// Decrypt the ciphertext using AES CBC
+// 	block, err := aes.NewCipher(symKey)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Check if the AES block size matches the expected size
+// 	if len(ciphertext)%aes.BlockSize != 0 {
+// 		return errors.New("ciphertext is not a multiple of block size")
+// 	}
+
+// 	// Decrypt the ciphertext using AES CBC
+// 	mode := cipher.NewCBCDecrypter(block, iv)
+// 	plaintext := make([]byte, len(ciphertext))
+// 	mode.CryptBlocks(plaintext, ciphertext)
+
+// 	// Unpad the plaintext
+// 	plaintext, err = unpad(plaintext, aes.BlockSize)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Write the decrypted file
+// 	decryptedFilename := filename[:len(filename)-4] + ".dec"
+// 	err = ioutil.WriteFile(decryptedFilename, plaintext, 0644)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	log.Printf("Decrypted file saved as %s", decryptedFilename)
+// 	return nil
+// }
+
+// // unpad removes padding from the plaintext
+// func unpad(data []byte, blockSize int) ([]byte, error) {
+// 	paddingLen := int(data[len(data)-1])
+// 	if paddingLen > blockSize || paddingLen == 0 {
+// 		return nil, errors.New("invalid padding")
+// 	}
+
+// 	return data[:len(data)-paddingLen], nil
+// }
+
+// // verifyHMAC compares the HMAC tag with the calculated HMAC for integrity verification
+// func verifyHMAC(key, data, expectedHMAC []byte) bool {
+// 	calculatedHMAC := hmac.New(sha256.New, key)
+// 	calculatedHMAC.Write(data)
+// 	return hmac.Equal(calculatedHMAC.Sum(nil), expectedHMAC)
+// }
+
+// // calculateHMAC calculates an HMAC with the given key and data using SHA256.
+// func calculateHMAC(key, data []byte) []byte {
+// 	hmacObj := hmac.New(sha256.New, key)
+// 	hmacObj.Write(data)
+// 	return hmacObj.Sum(nil)
+//}
 
 func startFileReceiver(port int) {
 	// Receive files on port
@@ -213,6 +365,7 @@ func handleConnection(conn net.Conn) {
 		log.Println("Failed to derive key:", err)
 		return
 	}
+	symmkeyGlobal = key
 	log.Printf("Derived key: %x\n", key)
 	log.Printf("Using salt: %x\n", salt)
 	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
@@ -304,7 +457,7 @@ func discoverServices() {
 	}
 }
 
-func sendFile(peerIP string, peerPort int, filename string) {
+func sendFile(peerIP string, peerPort int, filename string, key []byte) {
 	// Open the file
 	file, err := os.Open(filename)
 	if err != nil {
@@ -322,6 +475,12 @@ func sendFile(peerIP string, peerPort int, filename string) {
 	defer conn.Close()
 
 	// Send the filename and file data
+
+	encryptedfile := encryptFile(key, filename)
+	fmt.Printf("Encrypted File Error: ", encryptedfile)
+	fmt.Printf("Encrypt File Function Called")
+	encryptFile(key, filename)
+	fmt.Printf("Encrypt File Function Finished")
 	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", filename)))
 	if err != nil {
 		log.Printf("❌ Failed to send filename")
@@ -358,6 +517,10 @@ func main() {
 	discoverServices()
 	fmt.Print("HELLLLO")
 
+	// NEED TO ADD:
+	// give user 2 options, either select peer to send file to or decrypt file
+	// if user selects decrypt file, they will enter file name to decrypt
+
 	// Allow user to select a peer and send a file
 	choice := -1
 	fmt.Print("\nSelect a peer to send a file to (enter number): ")
@@ -369,7 +532,7 @@ func main() {
 		fmt.Printf("Enter the filename to send to %s:%d: ", peerIP, peerPort)
 		var filename string
 		fmt.Scan(&filename)
-		sendFile(peerIP, peerPort, filename)
+		sendFile(peerIP, peerPort, filename, symmkeyGlobal)
 	} else {
 		log.Println("❌ Invalid peer selection")
 	}
