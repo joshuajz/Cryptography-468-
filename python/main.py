@@ -1,5 +1,3 @@
-import socket
-import threading
 # libraries for network connections
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 import socket
@@ -7,7 +5,7 @@ import threading
 import json
 import time
 import os
-from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
+import traceback
 
 # libraries for cryptography specifically 
 import random
@@ -41,9 +39,9 @@ def generate_dh_keypair():
 
 # define port number, service type, and service name
 SERVICE_TYPE = "_ping._tcp.local."
+SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
 MESSAGE_BUFFER = []
-SERVICE_NAME = "PythonPeer._ping._tcp.local."
 
 def compute_shared_secret(peer_public_key, private_key, p):
     return pow(peer_public_key, private_key, p)
@@ -51,8 +49,10 @@ def compute_shared_secret(peer_public_key, private_key, p):
 def derive_key(shared_secret):
     # Derive a key using the shared secret and scrypt (instead of PBKDF2)
     salt = get_random_bytes(16)  # Random salt
-    key = scrypt(str(shared_secret).encode(), salt, 2**14, 8, 1, 32)
-    return key, salt
+
+    key = scrypt(str(shared_secret).encode(), salt, 32, 8, 1, 32)
+
+    return key
 
 def calculate_hmac(key, data):
     # Calculate HMAC using SHA256
@@ -62,14 +62,14 @@ def calculate_hmac(key, data):
 def encrypt_file(key, filename):
     salt = get_random_bytes(16)  # Generate a random salt
     iv = get_random_bytes(AES.block_size)  # Generate a random IV
-    key = derive_key(key)  # Derive the encryption key from shared secret
     
     # Read the file to encrypt
     with open(filename, 'rb') as f:
         plaintext = f.read()
     
     # Encrypt the file using AES CBC
-    cipher = AES.new(key, AES.MODE_CBC, iv)
+    print("Encrypt Files Key:", key)
+    cipher = AES.new(key, AES.MODE_CBC, iv) #! this is the errror line
     ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
     
     # Generate HMAC of the ciphertext
@@ -84,7 +84,7 @@ def encrypt_file(key, filename):
     
     print(f"Encrypted file saved as {filename}.enc")
 
-def decrypt_file(key, filename):
+def decrypt_file(sym_key, filename):
     with open(filename, 'rb') as f:
         data = f.read()
     
@@ -112,14 +112,14 @@ def decrypt_file(key, filename):
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
 def tcp_listener(port=SERVICE_PORT):
-    # Sets up TCP listening port
+    # sets up tcp listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
     sock.listen(1)
     MESSAGE_BUFFER.append(f"Listening for TCP file transfers on port {port}...")
 
     while True:
-        # Displays current connection and checks for file transfer
+        # displays current connection and checks for file transfer
         conn, addr = sock.accept()
         with conn:
             MESSAGE_BUFFER.append(f"Connection from {addr}")
@@ -131,13 +131,13 @@ def tcp_listener(port=SERVICE_PORT):
                 buffer += chunk
 
             if b"\n" in buffer:
-                # If file is sent, download it
+                # if file is sent, download it
                 filename, filedata = buffer.split(b"\n", 1)
                 filename = filename.decode()
                 with open(f"received_{filename}", "wb") as f:
                     f.write(filedata)
 
-                # Here we assume the shared secret was already derived using DHKE
+                # NEED TO CHANGE TO USING DERIVED KEY
                 shared_secret = int(input("Enter shared secret (received from peer): "))  # Example input
                 decryption_key = derive_key(shared_secret)
                 decrypt_file(decryption_key, f"received_{filename}.enc")
@@ -145,7 +145,7 @@ def tcp_listener(port=SERVICE_PORT):
                 MESSAGE_BUFFER.append(f"✅ Received file '{filename}' from {addr}")
 
 def get_ip():
-    # Get IP connections
+    # get IP connections
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(('10.255.255.255', 1))
@@ -179,20 +179,15 @@ class Listener:
         # Here we can simply call add_service again (or perform a different action)
         self.add_service(zeroconf, service_type, service_name)
 
-def send_file(ip, port, filename):
+def send_file(ip, port, filename, symmetric_key):
     try:
           with open(filename, "rb") as f:
             file_data = f.read()
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((ip, port))
 
-            # Derive a shared secret 
-            shared_secret = int(input("Enter shared secret: "))  # do we need this? they should send shared keys rather than type them in
-
-            encryption_key = derive_key(shared_secret)
-
             # Encrypt the file before sending it
-            encrypt_file(encryption_key, filename)
+            encrypt_file(symmetric_key, filename)
 
             # Read the encrypted file and send it
             with open(f"{filename}.enc", "rb") as enc_file:
@@ -201,16 +196,17 @@ def send_file(ip, port, filename):
             sock.close()
             MESSAGE_BUFFER.append(f"✅ Sent encrypted file '{filename}' to {ip}:{port}")
     except FileNotFoundError:
-        # Displays error if file not found
         MESSAGE_BUFFER.append(f"❌ File '{filename}' not found.")
+        traceback.print_exc()
     except Exception as e:
         MESSAGE_BUFFER.append(f"❌ Error: {e}")
+        traceback.print_exc()
 
 def main():
+
     ip = get_ip()
     zeroconf = Zeroconf()
 
-    # Register the service with a unique service name
     info = ServiceInfo(
         SERVICE_TYPE,
         SERVICE_NAME,
@@ -218,7 +214,7 @@ def main():
         port=SERVICE_PORT,
         properties={}
     )
-    # Register an mDNS service with the info we have defined
+    # register an mDNS service with the info we have defined
     zeroconf.register_service(info)
     MESSAGE_BUFFER.append(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
 
@@ -233,12 +229,18 @@ def main():
             # Display buffered messages before clearing the terminal
             os.system('cls' if os.name == 'nt' else 'clear')
             print("Peers:")
+            # for message in listener.messages:
+                # print(message)  # Print all messages stored in the buffer
+            
+            # listener.messages = []  # Clear messages after displaying them
+            
             peers = list(listener.peers)
-
+            
             for i, (name, peer_ip, peer_port) in enumerate(peers):
                 print(f"[{i}] {name} at {peer_ip}:{peer_port}")
 
             print("\nLogs:")
+
             for message in MESSAGE_BUFFER:
                 print(message)  # Print all messages stored in the buffer
             print('\n')
@@ -286,14 +288,15 @@ def main():
 
                         filename = input("Enter the filename to send: ").strip()
                         peer = peers[idx]
-                        MESSAGE_BUFFER.append(f'Sending to peer: {peer[1]} {peer[2]} {filename}')
-                        send_file(peer[1], peer[2], filename)
+                        MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
+                        print("SYMMETRIC KEY: ", symmetric_key)
+                        send_file(peer[1], peer[2], filename, symmetric_key)
             
     except KeyboardInterrupt:
-        # Shuts down with keyboard interrupt
+        # shuts down with keyboard interrupt
         print("Shutting down...")
     finally:
-        # Close all connections
+        # close all connections
         zeroconf.unregister_service(info)
         zeroconf.close()
 
