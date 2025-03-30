@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"os/signal"
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
+	"golang.org/x/crypto/scrypt"
 )
 
 const (
@@ -24,6 +29,14 @@ const (
 )
 
 var peers []map[string]interface{} // List of dictionaries (maps) to store peer information
+var (
+	// Predefined DH parameters
+	p, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
+		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
+		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
+		"E485B576625E7EC6F44C42E9A637A3620FFFFFFFFFFFFFFFF", 16)
+	g = big.NewInt(2)
+) // Message buffer to store logs and predefined DH parameters
 
 func getLocalIP() (string, error) {
 	// List of network interfaces
@@ -77,6 +90,35 @@ func startResponder() (*zeroconf.Server, error) {
 	return server, nil
 }
 
+func generateDHKeyPair() (*big.Int, *big.Int) {
+	priv, _ := rand.Int(rand.Reader, p)
+	pub := new(big.Int).Exp(g, priv, p)
+	return priv, pub
+}
+
+func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
+	shared := new(big.Int).Exp(theirPub, myPriv, p)
+	hash := sha256.Sum256(shared.Bytes())
+	return hash[:]
+}
+
+// deriveKey derives a cryptographic key from the shared secret using scrypt
+func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
+	// Generate a random salt (16 bytes)
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Derive a 32-byte key using scrypt
+	key, err := scrypt.Key(sharedSecret, salt, 16384, 8, 1, 32)
+	if err != nil {
+		return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
+	}
+
+	return key, salt, nil
+}
+
 func startFileReceiver(port int) {
 	// Receive files on port
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port)) // Binding to all interfaces
@@ -93,45 +135,110 @@ func startFileReceiver(port int) {
 			continue
 		}
 		// Asynchronously handle each file transfer
-		go handleFileTransfer(conn)
+		go handleConnection(conn)
 	}
 }
 
-func handleFileTransfer(conn net.Conn) {
-	// Handles collecting file data, and saving it to a file
+func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	log.Println("Connection established with", conn.RemoteAddr())
 
-	// Read file data, maximum of 4096 bytes
-	buffer := make([]byte, 4096)
+	// Diffie-Hellman Key Exchange
+	myPriv, myPub := generateDHKeyPair()
+	// conn.Write(myPub.Bytes())
+	fmt.Print(myPriv)
 
-	// Read the filename
-	n, err := conn.Read(buffer)
-	if err != nil && err != io.EOF {
-		log.Println("Failed to read from connection:", err)
+	// Send public key in JSON format
+	response := map[string]string{
+		"public_key": myPub.String(), // Send key as a hexadecimal string
+	}
+
+	fmt.Printf("GO'S PUBLIC KEY", myPub, "\n\n")
+	fmt.Printf("GO'S PUBLIC KEY: %s\n", myPub.String())
+
+	jsonData, err := json.Marshal(response)
+	if err != nil {
+		log.Println("Error encoding JSON:", err)
 		return
 	}
 
-	// Split into filename + other data
+	// Send JSON to client
+	_, err = conn.Write(jsonData)
+	if err != nil {
+		log.Println("Error sending JSON:", err)
+		return
+	}
+	log.Println("Sent JSON:", string(jsonData)) // Debugging output
+
+	// Receive their public key
+	theirPubBytes := make([]byte, 512)
+	n, err := conn.Read(theirPubBytes)
+	if err != nil {
+		log.Println("Failed to receive peer public key:", err)
+		return
+	}
+
+	theirPubHex := string(theirPubBytes[:n])                   // Convert bytes to a string
+	fmt.Printf("Received Public Key (Hex): %s\n", theirPubHex) // Log the received hex string
+	// Struct to hold the received JSON data
+	var data struct {
+		PublicKey string `json:"public_key"`
+	}
+
+	// Unmarshal the JSON data into the struct
+	errr := json.Unmarshal([]byte(theirPubHex), &data)
+	if errr != nil {
+		log.Fatalf("Error unmarshalling JSON: %v", err)
+	}
+
+	// Public key as hexadecimal
+	// fmt.Printf("Received Public Key (Hex): %s\n", data.PublicKey)
+
+	// Convert the hexadecimal string to a big.Int
+	publicKey, ok := new(big.Int).SetString(data.PublicKey[2:], 16) // Remove "0x" prefix and convert to big.Int
+	if !ok {
+		log.Fatalf("Error converting public key from hex")
+	}
+
+	// Print the public key as a big.Int (decimal format)
+	fmt.Printf("Public Key (BigInt): %s\n", publicKey.String())
+
+	// Compute shared secret
+	sharedSecret := computeSharedSecret(publicKey, myPriv)
+	// sharedSecret := computeSharedSecret(theirPub, myPriv)
+
+	// Derive symmetric key (this is a session key)
+	key, salt, err := deriveKey(sharedSecret)
+	if err != nil {
+		log.Println("Failed to derive key:", err)
+		return
+	}
+	log.Printf("Derived key: %x\n", key)
+	log.Printf("Using salt: %x\n", salt)
+	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
+
+	// File transfer handling (just an example)
+	buffer := make([]byte, 4096)
+	n, err = conn.Read(buffer)
+	if err != nil && err != io.EOF {
+		log.Println("Failed to read file data:", err)
+		return
+	}
 	parts := string(buffer[:n])
 	fileParts := strings.SplitN(parts, "\n", 2)
 	if len(fileParts) < 2 {
 		log.Println("Invalid file format")
 		return
 	}
-
 	filename := fileParts[0]
-	filedata := []byte(fileParts[1]) // Content after name
-
-	// Create the file to save the data
+	filedata := []byte(fileParts[1])
+	log.Println("Received file: %s", filename)
 	f, err := os.Create("received_" + filename)
 	if err != nil {
 		log.Println("Failed to create file:", err)
 		return
 	}
 	defer f.Close()
-
-	// Write the file data
 	_, err = f.Write(filedata)
 	if err != nil {
 		log.Println("Failed to write file:", err)
@@ -266,5 +373,4 @@ func main() {
 	} else {
 		log.Println("❌ Invalid peer selection")
 	}
-
 }
