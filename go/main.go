@@ -145,6 +145,7 @@ func handleConnection(conn net.Conn) {
 	// Diffie-Hellman Key Exchange
 	myPriv, myPub := generateDHKeyPair()
 	// conn.Write(myPub.Bytes())
+	fmt.Print(myPriv)
 
 	// Send public key in JSON format
 	response := map[string]string{
@@ -152,6 +153,7 @@ func handleConnection(conn net.Conn) {
 	}
 
 	fmt.Printf("GO'S PUBLIC KEY", myPub, "\n\n")
+	fmt.Printf("GO'S PUBLIC KEY: %s\n", myPub.String())
 
 	jsonData, err := json.Marshal(response)
 	if err != nil {
@@ -168,23 +170,43 @@ func handleConnection(conn net.Conn) {
 	log.Println("Sent JSON:", string(jsonData)) // Debugging output
 
 	// Receive their public key
-	theirPubBytes := make([]byte, 256)
+	theirPubBytes := make([]byte, 512)
 	n, err := conn.Read(theirPubBytes)
 	if err != nil {
 		log.Println("Failed to receive peer public key:", err)
 		return
 	}
 
-	// Parse the public key from the client (Python)
-	theirPub := new(big.Int).SetBytes(theirPubBytes[:n])
+	theirPubHex := string(theirPubBytes[:n])                   // Convert bytes to a string
+	fmt.Printf("Received Public Key (Hex): %s\n", theirPubHex) // Log the received hex string
+	// Struct to hold the received JSON data
+	var data struct {
+		PublicKey string `json:"public_key"`
+	}
 
-	fmt.Printf("Python's sent public key:\n")
-	fmt.Printf(theirPub.Text(10))
+	// Unmarshal the JSON data into the struct
+	errr := json.Unmarshal([]byte(theirPubHex), &data)
+	if errr != nil {
+		log.Fatalf("Error unmarshalling JSON: %v", err)
+	}
+
+	// Public key as hexadecimal
+	// fmt.Printf("Received Public Key (Hex): %s\n", data.PublicKey)
+
+	// Convert the hexadecimal string to a big.Int
+	publicKey, ok := new(big.Int).SetString(data.PublicKey[2:], 16) // Remove "0x" prefix and convert to big.Int
+	if !ok {
+		log.Fatalf("Error converting public key from hex")
+	}
+
+	// Print the public key as a big.Int (decimal format)
+	fmt.Printf("Public Key (BigInt): %s\n", publicKey.String())
 
 	// Compute shared secret
-	sharedSecret := computeSharedSecret(theirPub, myPriv)
+	sharedSecret := computeSharedSecret(publicKey, myPriv)
+	// sharedSecret := computeSharedSecret(theirPub, myPriv)
 
-	// Derive symmetric key
+	// Derive symmetric key (this is a session key)
 	key, salt, err := deriveKey(sharedSecret)
 	if err != nil {
 		log.Println("Failed to derive key:", err)

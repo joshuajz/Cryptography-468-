@@ -260,10 +260,16 @@ def main():
                             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                             sock.connect((peer_ip, peer_port))  # <-- Connect to the peer
                             p, g, private_key, public_key = generate_dh_keypair()
+
+                            print('public_key (hex):', hex(public_key))
+                            public_key_hex = hex(public_key)  # Convert the public key to a hex string
+                            sock.sendall(json.dumps({'public_key': public_key_hex}).encode())
+
+
                             print("Python is sending their public key:", public_key)
                              # Send DH parameters to peer
-                            sock.sendall(json.dumps({'p': p, 'g': g, 'public_key': public_key}).encode())
-
+                            # sock.sendall(str(public_key).encode())
+                            # print(json.dumps({'p': p, 'g': g, 'public_key': public_key}).encode())
                             server_data = sock.recv(4096)
 
                             if server_data:
