@@ -29,13 +29,11 @@ const (
 )
 
 var (
-	MESSAGE_BUFFER []string
-
 	// Predefined DH parameters
 	p, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
 		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
 		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
-		"E485B576625E7EC6F44C42E9A63A3620FFFFFFFFFFFFFFFF", 16)
+		"E485B576625E7EC6F44C42E9A637A3620FFFFFFFFFFFFFFFF", 16)
 	g = big.NewInt(2)
 ) // Message buffer to store logs and predefined DH parameters
 
@@ -146,11 +144,15 @@ func handleConnection(conn net.Conn) {
 
 	// Diffie-Hellman Key Exchange
 	myPriv, myPub := generateDHKeyPair()
-	conn.Write(myPub.Bytes())
+	// conn.Write(myPub.Bytes())
 
+	// Send public key in JSON format
 	response := map[string]string{
-		"public_key": myPub.Text(16), // Send key as a hexadecimal string
+		"public_key": myPub.String(), // Send key as a hexadecimal string
 	}
+
+	fmt.Printf("GO'S PUBLIC KEY", myPub, "\n\n")
+
 	jsonData, err := json.Marshal(response)
 	if err != nil {
 		log.Println("Error encoding JSON:", err)
@@ -165,6 +167,7 @@ func handleConnection(conn net.Conn) {
 	}
 	log.Println("Sent JSON:", string(jsonData)) // Debugging output
 
+	// Receive their public key
 	theirPubBytes := make([]byte, 256)
 	n, err := conn.Read(theirPubBytes)
 	if err != nil {
@@ -172,16 +175,16 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Parse JSON from client
-	var clientData map[string]string
-	err = json.Unmarshal(theirPubBytes[:n], &clientData)
-	if err != nil {
-		log.Println("Failed to parse JSON:", err)
-		return
-	}
-	theirPub := new(big.Int).SetBytes(theirPubBytes)
+	// Parse the public key from the client (Python)
+	theirPub := new(big.Int).SetBytes(theirPubBytes[:n])
+
+	fmt.Printf("Python's sent public key:\n")
+	fmt.Printf(theirPub.Text(10))
+
+	// Compute shared secret
 	sharedSecret := computeSharedSecret(theirPub, myPriv)
 
+	// Derive symmetric key
 	key, salt, err := deriveKey(sharedSecret)
 	if err != nil {
 		log.Println("Failed to derive key:", err)
@@ -191,7 +194,7 @@ func handleConnection(conn net.Conn) {
 	log.Printf("Using salt: %x\n", salt)
 	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
 
-	// File transfer
+	// File transfer handling (just an example)
 	buffer := make([]byte, 4096)
 	n, err = conn.Read(buffer)
 	if err != nil && err != io.EOF {
@@ -206,7 +209,7 @@ func handleConnection(conn net.Conn) {
 	}
 	filename := fileParts[0]
 	filedata := []byte(fileParts[1])
-	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("Received file: %s", filename))
+	log.Println("Received file: %s", filename)
 	f, err := os.Create("received_" + filename)
 	if err != nil {
 		log.Println("Failed to create file:", err)
@@ -218,7 +221,7 @@ func handleConnection(conn net.Conn) {
 		log.Println("Failed to write file:", err)
 		return
 	}
-	MESSAGE_BUFFER = append(MESSAGE_BUFFER, fmt.Sprintf("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String()))
+	log.Println("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String())
 }
 
 func clearTerminal() {
@@ -285,14 +288,8 @@ func main() {
 		select {
 		case <-ticker.C:
 			// Re-run service discovery every 10 seconds
-			clearTerminal()
 			discoverServices()
 
-			// Print message buffer
-			fmt.Println("\nLogs:")
-			for _, msg := range MESSAGE_BUFFER {
-				fmt.Println(msg)
-			}
 			fmt.Println("\n")
 		case <-sig:
 			// Handle shutdown signal

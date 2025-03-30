@@ -1,4 +1,3 @@
-
 # libraries for network connections
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 import socket
@@ -109,8 +108,6 @@ def decrypt_file(key, filename):
     
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
-
-
 def tcp_listener(port=SERVICE_PORT):
     # sets up tcp listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -156,7 +153,7 @@ def get_ip():
         s.close()
 
 class Listener:
-    # listener class for listening ports 
+    # Listener class for managing service state changes
     def __init__(self):
         self.peers = set()
         self.messages = []  # List to store messages for displaying
@@ -170,9 +167,14 @@ class Listener:
             self.messages.append(f"Discovered service: {service_name} at {ip}:{info.port}")
 
     def remove_service(self, zeroconf, service_type, service_name):
-        # Removes a discovered IP from the list
+        # Removes a discovered service from the list
         self.messages.append(f"Peer removed: {service_name}")
         self.peers = {peer for peer in self.peers if peer[0] != service_name}
+
+    def update_service(self, zeroconf, service_type, service_name):
+        # Updates the service state if it changes
+        # Here we can simply call add_service again (or perform a different action)
+        self.add_service(zeroconf, service_type, service_name)
 
 def send_file(ip, port, filename):
     try:
@@ -216,9 +218,6 @@ def main():
     zeroconf.register_service(info)
     MESSAGE_BUFFER.append(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
 
-
-    
-
     # starts TCP listener 
     threading.Thread(target=tcp_listener, args=(SERVICE_PORT,), daemon=True).start()
 
@@ -249,30 +248,42 @@ def main():
             if peers:
                 # input system for sending files. 
                 # select file and user to send file to
-                choice = input("Send file to which peer? Enter number or 'r' to refresh: ").strip()
+                choice = input("Select a peer: ").strip()
                 if choice.isdigit():
                     idx = int(choice)
                     if 0 <= idx < len(peers):
 
-                        peer_ip, peer_port = peers[idx][1], peers[idx][2]  # Get the chosen peer's IP and port
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.connect((peer_ip, peer_port))  # <-- Connect to the peer
-                        p, g, private_key, public_key = generate_dh_keypair()
-                
-                     
-                        sock.sendall(json.dumps({'p': p, 'g': g, 'public_key': public_key}).encode())
-                        server_data = json.loads(sock.recv(4096).decode())
-                        server_public_key = int(server_data['public_key'])
-                        shared_secret = compute_shared_secret(server_public_key, private_key, p)
-                        symmetric_key = derive_key(shared_secret)
-                        print(f"Derived symmetric key: {symmetric_key.hex()}")
+                        mode = int(input("1. Exchange Keys | 2. Send File: "))
 
+                        if mode == 1:
+                            peer_ip, peer_port = peers[idx][1], peers[idx][2]  # Get the chosen peer's IP and port
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.connect((peer_ip, peer_port))  # <-- Connect to the peer
+                            p, g, private_key, public_key = generate_dh_keypair()
+                            print("Python is sending their public key:", public_key)
+                             # Send DH parameters to peer
+                            sock.sendall(json.dumps({'p': p, 'g': g, 'public_key': public_key}).encode())
+
+                            server_data = sock.recv(4096)
+
+                            if server_data:
+                                print('server data:', server_data)
+                                server_data = json.loads(server_data.decode('utf-8'))  # Decode properly with UTF-8
+                                server_public_key = int(server_data['public_key'])
+                                shared_secret = compute_shared_secret(server_public_key, private_key, p)
+                                symmetric_key = derive_key(shared_secret)
+                            else:
+                                print("No data received from the server.")
+
+                        elif mode == 2:
+                            print("send file")
+                        else:
+                            break 
 
                         filename = input("Enter the filename to send: ").strip()
                         peer = peers[idx]
                         MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
                         send_file(peer[1], peer[2], filename)
-            
             
     except KeyboardInterrupt:
         # shuts down with keyboard interrupt
