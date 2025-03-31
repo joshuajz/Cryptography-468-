@@ -22,6 +22,15 @@ from Crypto.Random import get_random_bytes
 from Crypto.Protocol.KDF import scrypt
 from Crypto.Util.number import getPrime, inverse
 
+# define port number, service type, and service name
+SERVICE_TYPE = "_ping._tcp.local."
+SERVICE_NAME = "PythonPeer._ping._tcp.local."
+SERVICE_PORT = 12345
+MESSAGE_BUFFER = []
+
+# KEYS
+SYMMETRIC_KEY = None
+
 def generate_dh_keypair():
     # Standard 2048-bit safe prime for DHKE (can be changed to a larger prime if needed)
     p = int("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
@@ -36,12 +45,6 @@ def generate_dh_keypair():
     private_key = getrandbits(2048) % p
     public_key = pow(g, private_key, p)
     return p, g, private_key, public_key
-
-# define port number, service type, and service name
-SERVICE_TYPE = "_ping._tcp.local."
-SERVICE_NAME = "PythonPeer._ping._tcp.local."
-SERVICE_PORT = 12345
-MESSAGE_BUFFER = []
 
 def compute_shared_secret(peer_public_key, private_key, p):
     return pow(peer_public_key, private_key, p)
@@ -93,11 +96,11 @@ def decrypt_file(sym_key, filename):
     hmac_tag = data[32:64]  # Extract HMAC tag
     ciphertext = data[64:]  # Extract ciphertext
     
-    # Derive key from shared secret
+    # # Derive key from shared secret
     key = derive_key(key)
     
     # Verify HMAC tag
-    if hmac_tag != calculate_hmac(key, ciphertext):
+    if hmac_tag != calculate_hmac(sym_key, ciphertext):
         print("HMAC verification failed!")
         return
     
@@ -203,6 +206,7 @@ def send_file(ip, port, filename, symmetric_key):
         traceback.print_exc()
 
 def main():
+    global SYMMETRIC_KEY
 
     ip = get_ip()
     zeroconf = Zeroconf()
@@ -277,21 +281,22 @@ def main():
                                 server_data = json.loads(server_data.decode('utf-8'))  # Decode properly with UTF-8
                                 server_public_key = int(server_data['public_key'])
                                 shared_secret = compute_shared_secret(server_public_key, private_key, p)
-                                symmetric_key = derive_key(shared_secret)
+                                SYMMETRIC_KEY = derive_key(shared_secret) #! TODO: Use this for decryption
                             else:
                                 print("No data received from the server.")
 
                         elif mode == 2:
-                            print("send file")
+                            filename = input("Enter the filename to send: ").strip()
+                            peer = peers[idx]
+                            if not(SYMMETRIC_KEY):
+                                MESSAGE_BUFFER.append("Error: You must first exchange keys.")
+                                continue
+                            print("SYMMETRIC KEY: ", SYMMETRIC_KEY)
+                            MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
+                            send_file(peer[1], peer[2], filename, SYMMETRIC_KEY)
                         else:
-                            break 
+                            continue 
 
-                        filename = input("Enter the filename to send: ").strip()
-                        peer = peers[idx]
-                        MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
-                        print("SYMMETRIC KEY: ", symmetric_key)
-                        send_file(peer[1], peer[2], filename, symmetric_key)
-            
     except KeyboardInterrupt:
         # shuts down with keyboard interrupt
         print("Shutting down...")

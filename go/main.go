@@ -474,19 +474,23 @@ func sendFile(peerIP string, peerPort int, filename string, key []byte) {
 	}
 	defer conn.Close()
 
-	// Send the filename and file data
-
-	encryptedfile := encryptFile(key, filename)
-	fmt.Printf("Encrypted File Error: ", encryptedfile)
-	fmt.Printf("Encrypt File Function Called")
+	// Encrypt file
 	encryptFile(key, filename)
-	fmt.Printf("Encrypt File Function Finished")
-	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", filename)))
+
+	// Send the filename and file data
+	encryptedFileName := filename + ".enc"
+	encryptedFileOpen, err := os.Open(encryptedFileName)
 	if err != nil {
 		log.Printf("❌ Failed to send filename")
 		return
 	}
-	_, err = io.Copy(conn, file)
+
+	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", encryptedFileName)))
+	if err != nil {
+		log.Printf("❌ Failed to send filename")
+		return
+	}
+	_, err = io.Copy(conn, encryptedFileOpen)
 	if err != nil {
 		log.Printf("❌ Failed to send file data")
 		return
