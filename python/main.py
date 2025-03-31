@@ -96,7 +96,6 @@ def decrypt_file(sym_key, filename):
     ciphertext = data[64:]  # Extract ciphertext
     
     # # Derive key from shared secret
-    key = derive_key(key)
     
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, ciphertext):
@@ -104,7 +103,7 @@ def decrypt_file(sym_key, filename):
         return
     
     # Decrypt the file using AES CBC mode
-    cipher = AES.new(key, AES.MODE_CBC, iv)
+    cipher = AES.new(SYMMETRIC_KEY, AES.MODE_CBC, iv)
     plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
     
     # Write decrypted file
@@ -114,6 +113,7 @@ def decrypt_file(sym_key, filename):
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
 def tcp_listener(port=SERVICE_PORT):
+    global SYMMETRIC_KEY
     # sets up tcp listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
@@ -140,9 +140,8 @@ def tcp_listener(port=SERVICE_PORT):
                     f.write(filedata)
 
                 # NEED TO CHANGE TO USING DERIVED KEY
-                shared_secret = int(input("Enter shared secret (received from peer): "))  # Example input
-                decryption_key = derive_key(shared_secret)
-                decrypt_file(decryption_key, f"received_{filename}.enc")
+                decryption_key = derive_key(SYMMETRIC_KEY)
+                decrypt_file(decryption_key, f"received_{filename}")
                 
                 print(f"✅ Received file '{filename}' from {addr}")
 
@@ -230,7 +229,6 @@ def main():
     try:
         while True:
             # Display buffered messages before clearing the terminal
-            # os.system('cls' if os.name == 'nt' else 'clear')
             print("Peers:")
             # for message in listener.messages:
                 # print(message)  # Print all messages stored in the buffer
@@ -282,7 +280,7 @@ def main():
                             filename = input("Enter the filename to send: ").strip()
                             peer = peers[idx]
                             if not(SYMMETRIC_KEY):
-                                print("❌ Error: You must first exchange keys.")
+                                print("Error: You must first exchange keys.")
                                 continue
                             print("SYMMETRIC KEY: ", SYMMETRIC_KEY)
                             print(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
