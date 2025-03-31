@@ -26,7 +26,6 @@ from Crypto.Util.number import getPrime, inverse
 SERVICE_TYPE = "_ping._tcp.local."
 SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
-MESSAGE_BUFFER = []
 
 # KEYS
 SYMMETRIC_KEY = None
@@ -97,7 +96,6 @@ def decrypt_file(sym_key, filename):
     ciphertext = data[64:]  # Extract ciphertext
     
     # # Derive key from shared secret
-    key = derive_key(key)
     
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, ciphertext):
@@ -105,7 +103,7 @@ def decrypt_file(sym_key, filename):
         return
     
     # Decrypt the file using AES CBC mode
-    cipher = AES.new(key, AES.MODE_CBC, iv)
+    cipher = AES.new(SYMMETRIC_KEY, AES.MODE_CBC, iv)
     plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
     
     # Write decrypted file
@@ -115,17 +113,18 @@ def decrypt_file(sym_key, filename):
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
 def tcp_listener(port=SERVICE_PORT):
+    global SYMMETRIC_KEY
     # sets up tcp listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
     sock.listen(1)
-    MESSAGE_BUFFER.append(f"Listening for TCP file transfers on port {port}...")
+    print(f"Listening for TCP file transfers on port {port}...")
 
     while True:
         # displays current connection and checks for file transfer
         conn, addr = sock.accept()
         with conn:
-            MESSAGE_BUFFER.append(f"Connection from {addr}")
+            print(f"Connection from {addr}")
             buffer = b""
             while True:
                 chunk = conn.recv(4096)
@@ -141,11 +140,11 @@ def tcp_listener(port=SERVICE_PORT):
                     f.write(filedata)
 
                 # NEED TO CHANGE TO USING DERIVED KEY
-                shared_secret = int(input("Enter shared secret (received from peer): "))  # Example input
-                decryption_key = derive_key(shared_secret)
-                decrypt_file(decryption_key, f"received_{filename}.enc")
+                decryption_key = derive_key(SYMMETRIC_KEY)
+                decrypt_file(decryption_key, f"received_{filename}")
                 
-                MESSAGE_BUFFER.append(f"✅ Received file '{filename}' from {addr}")
+                print(f"✅ Received file '{filename}' from {addr}")
+                exit()
 
 def get_ip():
     # get IP connections
@@ -197,12 +196,12 @@ def send_file(ip, port, filename, symmetric_key):
                 enc_file_data = enc_file.read()
                 sock.sendall(filename.encode() + b"\n" + enc_file_data)
             sock.close()
-            MESSAGE_BUFFER.append(f"✅ Sent encrypted file '{filename}' to {ip}:{port}")
+            print(f"✅ Sent encrypted file '{filename}' to {ip}:{port}")
     except FileNotFoundError:
-        MESSAGE_BUFFER.append(f"❌ File '{filename}' not found.")
+        print(f"❌ File '{filename}' not found.")
         traceback.print_exc()
     except Exception as e:
-        MESSAGE_BUFFER.append(f"❌ Error: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
 
 def main():
@@ -220,7 +219,7 @@ def main():
     )
     # register an mDNS service with the info we have defined
     zeroconf.register_service(info)
-    MESSAGE_BUFFER.append(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
+    print(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
 
     # starts TCP listener 
     threading.Thread(target=tcp_listener, args=(SERVICE_PORT,), daemon=True).start()
@@ -231,7 +230,6 @@ def main():
     try:
         while True:
             # Display buffered messages before clearing the terminal
-            os.system('cls' if os.name == 'nt' else 'clear')
             print("Peers:")
             # for message in listener.messages:
                 # print(message)  # Print all messages stored in the buffer
@@ -244,10 +242,6 @@ def main():
                 print(f"[{i}] {name} at {peer_ip}:{peer_port}")
 
             print("\nLogs:")
-
-            for message in MESSAGE_BUFFER:
-                print(message)  # Print all messages stored in the buffer
-            print('\n')
 
             if peers:
                 # input system for sending files. 
@@ -289,10 +283,10 @@ def main():
                             filename = input("Enter the filename to send: ").strip()
                             peer = peers[idx]
                             if not(SYMMETRIC_KEY):
-                                MESSAGE_BUFFER.append("Error: You must first exchange keys.")
+                                print("Error: You must first exchange keys.")
                                 continue
                             print("SYMMETRIC KEY: ", SYMMETRIC_KEY)
-                            MESSAGE_BUFFER.append(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
+                            print(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
                             send_file(peer[1], peer[2], filename, SYMMETRIC_KEY)
                         else:
                             continue 
