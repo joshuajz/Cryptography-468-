@@ -50,7 +50,8 @@ def compute_shared_secret(peer_public_key, private_key, p):
 
 def derive_key(shared_secret):
     # Derive a key using the shared secret and scrypt (instead of PBKDF2)
-    salt = get_random_bytes(16)  # Random salt
+    salt = hex(16109517898244232653137663862892695856)
+    print("DERIVED KEY SALT: ", salt)
 
     key = scrypt(str(shared_secret).encode(), salt, 32, 8, 1, 32)
 
