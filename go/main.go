@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,10 +35,15 @@ const (
 var peers []map[string]interface{} // List of dictionaries (maps) to store peer information
 var (
 	// Predefined DH parameters
-	p, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
-		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
-		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
-		"E485B576625E7EC6F44C42E9A637A3620FFFFFFFFFFFFFFFF", 16)
+	p, _ = new(big.Int).SetString(
+		"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
+			"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
+			"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
+			"E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
+			"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"+
+			"C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"+
+			"83655D23DCA3AD961C62F356208552BB9ED529077096966D"+
+			"670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
 	g = big.NewInt(2)
 ) // Message buffer to store logs and predefined DH parameters
 
@@ -162,7 +168,8 @@ func encryptFile(key []byte, filename string) error {
 	hmacHash := hmac.New(sha256.New, key)
 	hmacHash.Write(ciphertext)
 	hmacTag := hmacHash.Sum(nil)
-	fmt.Println("HMAC")
+	fmt.Printf("HII:HMACHash:", hmacHash, "\nkey:", key, "\nciphertext:", ciphertext)
+	fmt.Printf("\n\nKey to encrypt the file: %x", key, "\n")
 
 	// Save the encrypted file with salt, IV, HMAC, and ciphertext
 	encFile := fmt.Sprintf("%s.enc", filename)
@@ -192,6 +199,14 @@ func encryptFile(key []byte, filename string) error {
 	if err != nil {
 		return fmt.Errorf("failed to write ciphertext: %w", err)
 	}
+
+	fmt.Printf("Salt: %s\n", hex.EncodeToString(salt))
+	fmt.Printf("IV: %s\n", hex.EncodeToString(iv))
+	fmt.Printf("HMAC Tag: %s\n", hex.EncodeToString(hmacTag))
+	fmt.Printf("Ciphertext: %s\n", hex.EncodeToString(ciphertext))
+	fmt.Printf("Symmetric Key: %s\n", key)
+
+	fmt.Printf("Encrypted File Information:\nsalt: %s\niv: %s\nhmacTag: %s\nciphertext: %s\n", salt, iv, hmacTag, ciphertext)
 
 	log.Printf("Encrypted file saved as %s\n", encFile)
 	return nil

@@ -7,7 +7,7 @@ import time
 import os
 import traceback
 
-# libraries for cryptography specifically 
+# libraries for cryptography specifically
 import random
 import hmac
 import hashlib
@@ -27,7 +27,7 @@ SERVICE_TYPE = "_ping._tcp.local."
 SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
 
-# KEYS
+# Keys
 SYMMETRIC_KEY = None
 
 def generate_dh_keypair():
@@ -58,7 +58,8 @@ def derive_key(shared_secret):
 
 def calculate_hmac(key, data):
     # Calculate HMAC using SHA256
-    hmac_obj = HMAC.new(key, data, SHA256)
+    hmac_obj = hmac.new(key, data, SHA256)
+    print("CALCULATE HMAC:", hmac_obj.digest())
     return hmac_obj.digest()
 
 def encrypt_file(key, filename):
@@ -71,7 +72,7 @@ def encrypt_file(key, filename):
     
     # Encrypt the file using AES CBC
     print("Encrypt Files Key:", key)
-    cipher = AES.new(key, AES.MODE_CBC, iv) #! this is the errror line
+    cipher = AES.new(key, AES.MODE_CBC, iv) #! this is the error line
     ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
     
     # Generate HMAC of the ciphertext
@@ -87,23 +88,34 @@ def encrypt_file(key, filename):
     print(f"Encrypted file saved as {filename}.enc")
 
 def decrypt_file(sym_key, filename):
+    print("Decrypting the file")
     with open(filename, 'rb') as f:
         data = f.read()
+
+    # salt = unhexlify(data[:16])
+    # iv = unhexlify(data[16:32])
+    # hmac_tag = unhexlify(data[32:64])
+    # ciphertext = unhexlify(data[64:])
+
     
     salt = data[:16]  # Extract salt
     iv = data[16:32]  # Extract IV
     hmac_tag = data[32:64]  # Extract HMAC tag
     ciphertext = data[64:]  # Extract ciphertext
     
-    # # Derive key from shared secret
-    
+    computed_hmac = hmac.new(sym_key, ciphertext, hashlib.sha256).digest()
+    print('hmac_tag', hmac_tag, 'computed_hmac', computed_hmac)
+    print("key:", sym_key)
+    print("key2:", SYMMETRIC_KEY)
+
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, ciphertext):
         print("HMAC verification failed!")
         return
     
     # Decrypt the file using AES CBC mode
-    cipher = AES.new(SYMMETRIC_KEY, AES.MODE_CBC, iv)
+    print("Decrypting file")
+    cipher = AES.new(sym_key, AES.MODE_CBC, iv)
     plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
     
     # Write decrypted file
@@ -140,8 +152,8 @@ def tcp_listener(port=SERVICE_PORT):
                     f.write(filedata)
 
                 # NEED TO CHANGE TO USING DERIVED KEY
-                decryption_key = derive_key(SYMMETRIC_KEY)
-                decrypt_file(decryption_key, f"received_{filename}")
+                # decryption_key = derive_key(SYMMETRIC_KEY)
+                decrypt_file(SYMMETRIC_KEY, f"received_{filename}")
                 
                 print(f"✅ Received file '{filename}' from {addr}")
 
@@ -287,7 +299,6 @@ def main():
                             send_file(peer[1], peer[2], filename, SYMMETRIC_KEY)
                         else:
                             continue 
-            time.sleep(10)
 
     except KeyboardInterrupt:
         # shuts down with keyboard interrupt
