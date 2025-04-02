@@ -118,10 +118,11 @@ func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
 // deriveKey derives a cryptographic key from the shared secret using scrypt
 func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 	// Generate a random salt (16 bytes)
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
+	salt := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x0, 0x0, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	// if _, err := rand.Read(salt); err != nil {
+	// 	return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
+	// }
 
 	// Derive a 32-byte key using scrypt
 	key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
