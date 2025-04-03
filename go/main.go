@@ -464,7 +464,7 @@ func discoverServices() {
 	}
 
 	// Timeout mechanism to stop waiting if no peers are found within 10 seconds
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(1 * time.Second)
 
 	fmt.Println("Peers:")
 	index := 0
@@ -485,8 +485,6 @@ func discoverServices() {
 
 		case <-timeout:
 			// Timeout reached, stop waiting for services
-			fmt.Println("Timeout reached, finishing discovery.")
-			fmt.Println("Finish printing all of the peers")
 			close(entries) // Close the entries channel to stop the loop
 			return
 		}
@@ -534,6 +532,107 @@ func sendFile(peerIP string, peerPort int, filename string, key []byte) {
 	log.Printf("✅ Sent file '%s' to %s:%d", filename, peerIP, peerPort)
 }
 
+func selectPeer() *map[string]interface{} {
+	var choice int
+	fmt.Print("Enter the number of the peer to send the public key to: ")
+	_, err := fmt.Scan(&choice)
+	if err != nil || choice < 0 || choice >= len(peers) {
+		fmt.Println("Invalid selection")
+		return nil
+	}
+
+	// Return the selected peer
+	return &peers[choice]
+}
+
+func menu() {
+	for {
+		// Display the menu
+		fmt.Println("Menu:")
+		fmt.Println("0. Peer List")
+		fmt.Println("1. Key Verification/Transfer")
+		fmt.Println("2. Send a File")
+		fmt.Println("3. Add File to Share")
+		fmt.Println("4. Display Shared Files")
+		fmt.Println("5. Request a Shared File")
+		fmt.Println("6. Exit")
+
+		var choice int
+		_, err := fmt.Scan(&choice)
+		if err != nil {
+			fmt.Println("Invalid input, please enter a number between 1 and 6.")
+			continue
+		}
+
+		// Switch based on user's choice
+		switch choice {
+		case 0: // 0. Peer List
+			discoverServices()
+		case 1: // 1. Key Verification/Transfer
+			discoverServices()
+			selectedPeer := selectPeer()
+			if selectedPeer == nil {
+				log.Println("❌ No valid peer selected. Exiting.")
+				return
+			}
+
+			peerIP := (*selectedPeer)["IP"].(string)
+			peerPort := (*selectedPeer)["Port"].(int)
+
+			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", peerIP, peerPort))
+			if err != nil {
+				log.Printf("Error connecting to peer at %s:%d: %v", peerIP, peerPort, err)
+				return
+			}
+			defer conn.Close()
+
+			_, myPub := generateDHKeyPair()
+			response := map[string]string{
+				"public_key": myPub.String(), // Send the public key as a string (hex or decimal)
+			}
+
+			jsonData, err := json.Marshal(response)
+			if err != nil {
+				log.Println("Error encoding public key to JSON:", err)
+				return
+			}
+
+			_, err = conn.Write(jsonData)
+			if err != nil {
+				log.Println("Error sending public key:", err)
+				return
+			}
+
+			log.Println("Sent public key:", myPub.String())
+
+			// Handle receiving the peer's public key
+			handleConnection(conn)
+		case 2: // 2. Send a File
+			discoverServices()
+			selectedPeer := selectPeer()
+
+			peerIP := (*selectedPeer)["IP"].(string)
+			peerPort := (*selectedPeer)["Port"].(int)
+			fmt.Printf("📁 Enter the Filename to send to %s:%d: ", peerIP, peerPort)
+			var filename string
+			fmt.Scan(&filename)
+			sendFile(peerIP, peerPort, filename, symmkeyGlobal)
+		case 3:
+			fmt.Println("You selected Option 3")
+		case 4:
+			fmt.Println("You selected Option 4")
+		case 5:
+			fmt.Println("You selected Option 5")
+		case 6:
+			fmt.Println("Exiting...")
+			os.Exit(0) // Exit the program
+		default:
+			fmt.Println("Invalid Choice. Select a number between 0-6.")
+		}
+
+	}
+}
+
 func main() {
 	// Shutdown handling
 	sig := make(chan os.Signal, 1)
@@ -550,11 +649,17 @@ func main() {
 	go startFileReceiver(servicePort)
 
 	// Re-run the searcher every 10 seconds
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	// ticker := time.NewTicker(10 * time.Second)
+	// defer ticker.Stop()
 
 	// Discover services
-	discoverServices()
+	// go discoverServices()
+
+	menu()
+
+	// NEED TO ADD:
+	// give user 2 options, either select peer to send file to or decrypt file
+	// if user selects decrypt file, they will enter file name to decrypt
 
 	// Allow user to select a peer and send a file
 	choice := -1
@@ -564,7 +669,7 @@ func main() {
 		peer := peers[choice]
 		peerIP := peer["IP"].(string)
 		peerPort := peer["Port"].(int)
-		fmt.Printf("Enter the filename to send to %s:%d: ", peerIP, peerPort)
+		fmt.Printf("📁 Enter the Filename to send to %s:%d: ", peerIP, peerPort)
 		var filename string
 		fmt.Scan(&filename)
 		fmt.Print("symmkeyglobal: ", symmkeyGlobal)
