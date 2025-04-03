@@ -118,10 +118,8 @@ func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
 // deriveKey derives a cryptographic key from the shared secret using scrypt
 func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 	// Generate a random salt (16 bytes)
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
+	salt := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 	// Derive a 32-byte key using scrypt
 	key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
@@ -129,20 +127,16 @@ func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
 	}
 
+	fmt.Printf("GO SHARED SECRET: %x\n", sharedSecret)
+
 	return key, salt, nil
 }
 
 // Encrypt file using AES and HMAC
 func encryptFile(key []byte, filename string) error {
-	// Generate random salt and IV for encryption
-	salt := make([]byte, 16)
-	iv := make([]byte, aes.BlockSize)
-	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("failed to generate salt: %w", err)
-	}
-	if _, err := rand.Read(iv); err != nil {
-		return fmt.Errorf("failed to generate IV: %w", err)
-	}
+
+	salt := []byte("1234567890abcdef") // 16-byte fixed salt
+	iv := []byte("fedcba0987654321")   // 16-byte fixed IV
 
 	// Read the file to be encrypted
 	plaintext, err := os.ReadFile(filename)
@@ -151,7 +145,7 @@ func encryptFile(key []byte, filename string) error {
 	}
 
 	// Create AES cipher block and encrypt the plaintext
-	fmt.Print("\n\nkey before NewCipher is called", key, "\n")
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return fmt.Errorf("failed to create AES cipher: %w", err)
@@ -166,10 +160,17 @@ func encryptFile(key []byte, filename string) error {
 
 	// Calculate HMAC for the ciphertext
 	hmacHash := hmac.New(sha256.New, key)
-	hmacHash.Write(ciphertext)
+	dataForHMAC := append(append(salt, iv...), ciphertext...)
+	fmt.Printf("DATAFORHMAC: %x\n", dataForHMAC)
+	fmt.Println("Go HMAC Data Length:", len(dataForHMAC))
+
+	hmacHash.Reset()
+	hmacHash.Write(dataForHMAC)
 	hmacTag := hmacHash.Sum(nil)
+	fmt.Println("Go Data Length:", len(dataForHMAC))
+	fmt.Println("Go Key Length:", len(key))
+	fmt.Printf("Go HMAC: %x\n", hmacTag)
 	fmt.Printf("HII:HMACHash:", hmacHash, "\nkey:", key, "\nciphertext:", ciphertext)
-	fmt.Printf("\n\nKey to encrypt the file: %x", key, "\n")
 
 	// Save the encrypted file with salt, IV, HMAC, and ciphertext
 	encFile := fmt.Sprintf("%s.enc", filename)
@@ -190,23 +191,24 @@ func encryptFile(key []byte, filename string) error {
 		return fmt.Errorf("failed to write IV: %w", err)
 	}
 
-	_, err = file.Write(hmacTag)
-	if err != nil {
-		return fmt.Errorf("failed to write HMAC: %w", err)
-	}
-
 	_, err = file.Write(ciphertext)
 	if err != nil {
 		return fmt.Errorf("failed to write ciphertext: %w", err)
+	}
+
+	_, err = file.Write(hmacTag)
+	if err != nil {
+		return fmt.Errorf("failed to write HMAC: %w", err)
 	}
 
 	fmt.Printf("Salt: %s\n", hex.EncodeToString(salt))
 	fmt.Printf("IV: %s\n", hex.EncodeToString(iv))
 	fmt.Printf("HMAC Tag: %s\n", hex.EncodeToString(hmacTag))
 	fmt.Printf("Ciphertext: %s\n", hex.EncodeToString(ciphertext))
-	fmt.Printf("Symmetric Key: %s\n", key)
+	//fmt.Printf("Symmetric Key: %s\n", key)
+	fmt.Printf("Derived Key in Go: %x\n", key)
 
-	fmt.Printf("Encrypted File Information:\nsalt: %s\niv: %s\nhmacTag: %s\nciphertext: %s\n", salt, iv, hmacTag, ciphertext)
+	//fmt.Printf("Encrypted File Information:\nsalt: %s\niv: %s\nhmacTag: %s\nciphertext: %s\n", salt, iv, hmacTag, ciphertext)
 
 	log.Printf("Encrypted file saved as %s\n", encFile)
 	return nil
@@ -376,6 +378,7 @@ func handleConnection(conn net.Conn) {
 
 	// Derive symmetric key (this is a session key)
 	key, salt, err := deriveKey(sharedSecret)
+	symmkeyGlobal = key
 	if err != nil {
 		log.Println("Failed to derive key:", err)
 		return
@@ -534,7 +537,6 @@ func main() {
 
 	// Discover services
 	discoverServices()
-	fmt.Print("HELLLLO")
 
 	// NEED TO ADD:
 	// give user 2 options, either select peer to send file to or decrypt file
@@ -551,6 +553,7 @@ func main() {
 		fmt.Printf("Enter the filename to send to %s:%d: ", peerIP, peerPort)
 		var filename string
 		fmt.Scan(&filename)
+		fmt.Print("symmkeyglobal: ", symmkeyGlobal)
 		sendFile(peerIP, peerPort, filename, symmkeyGlobal)
 	} else {
 		log.Println("❌ Invalid peer selection")

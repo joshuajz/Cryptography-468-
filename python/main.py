@@ -16,6 +16,7 @@ from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
 from Crypto.PublicKey import RSA
 from Crypto.Hash import HMAC, SHA256
+from hashlib import sha256 as sh
 from Crypto.Random.random import getrandbits
 from hashlib import sha256
 from Crypto.Random import get_random_bytes
@@ -49,20 +50,35 @@ def compute_shared_secret(peer_public_key, private_key, p):
     return pow(peer_public_key, private_key, p)
 
 def derive_key(shared_secret):
-    # Derive a key using the shared secret and scrypt (instead of PBKDF2)
-    salt = get_random_bytes(16)  # Random salt
+    # # Derive a key using the shared secret and scrypt (instead of PBKDF2)
+    # salt = bytes(16)  # Salt
 
-    key = scrypt(str(shared_secret).encode(), salt, 32, 8, 1, 32)
+    # key = scrypt(str(shared_secret).encode(), salt, 32, 8, 1, 32)
+    # print("PYTHON SALT FROM DERIVE FUNCTION: ", salt)
+    # print("PYTHON SYM KEY FROM DERIVE FUNCTION: ", key.hex())
+
+    # return key
+
+    salt = bytes(16)  # 16-byte salt (same as Go)
+
+    # Ensure shared_secret is a byte array, like in Go
+    if isinstance(shared_secret, int):  
+        shared_secret = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')  # Ensure 32 bytes
+
+    key = scrypt(shared_secret, salt, 32, 8, 1, 32)  # Match Go's parameters
+    print("PYTHON SHARED SECRET: ", shared_secret.hex())
 
     return key
 
 def calculate_hmac(key, data):
     # Calculate HMAC using SHA256
+    print("Python HMAC Data Length:", len(data))
+    print("Python Key Length:", len(key))
     hmac_obj = hmac.new(key, data, SHA256)
-    print("CALCULATE HMAC:", hmac_obj.digest())
     return hmac_obj.digest()
 
 def encrypt_file(key, filename):
+    # CHANGE TO FIXED OR COMMUNICATED
     salt = get_random_bytes(16)  # Generate a random salt
     iv = get_random_bytes(AES.block_size)  # Generate a random IV
     
@@ -71,7 +87,6 @@ def encrypt_file(key, filename):
         plaintext = f.read()
     
     # Encrypt the file using AES CBC
-    print("Encrypt Files Key:", key)
     cipher = AES.new(key, AES.MODE_CBC, iv) #! this is the error line
     ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
     
@@ -82,36 +97,46 @@ def encrypt_file(key, filename):
     with open(f'{filename}.enc', 'wb') as enc_file:
         enc_file.write(salt)
         enc_file.write(iv)
-        enc_file.write(hmac_tag)
         enc_file.write(ciphertext)
+        enc_file.write(hmac_tag)
     
     print(f"Encrypted file saved as {filename}.enc")
 
+
+
+
+
 def decrypt_file(sym_key, filename):
+    print("DECRYPT FILE SYMMETRIC KEY:", sym_key, "/n")
     print("Decrypting the file")
     with open(filename, 'rb') as f:
         data = f.read()
-
-    # salt = unhexlify(data[:16])
-    # iv = unhexlify(data[16:32])
-    # hmac_tag = unhexlify(data[32:64])
-    # ciphertext = unhexlify(data[64:])
-
     
-    salt = data[:16]  # Extract salt
-    iv = data[16:32]  # Extract IV
-    hmac_tag = data[32:64]  # Extract HMAC tag
-    ciphertext = data[64:]  # Extract ciphertext
-    
-    computed_hmac = hmac.new(sym_key, ciphertext, hashlib.sha256).digest()
-    print('hmac_tag', hmac_tag, 'computed_hmac', computed_hmac)
-    print("key:", sym_key)
-    print("key2:", SYMMETRIC_KEY)
+    SALT_SIZE = 16
+    IV_SIZE = 16
+    HMAC_SIZE = 32
+
+    salt = data[:SALT_SIZE]  # Extract salt
+    iv = data[SALT_SIZE:SALT_SIZE + IV_SIZE]  # Extract IV
+    ciphertext = data[SALT_SIZE + IV_SIZE:-HMAC_SIZE]  # Extract ciphertext
+    hmac_tag = data[-HMAC_SIZE:]  # Extract hmac
+    salt_iv_ciphertext = salt + iv + ciphertext
+
+    print("SALTIVCIPHER: ", salt_iv_ciphertext.hex())
+
+
 
     # Verify HMAC tag
-    if hmac_tag != calculate_hmac(sym_key, ciphertext):
+    if hmac_tag != calculate_hmac(sym_key, salt_iv_ciphertext):
+
+        print("DATA RETREIVED FROM GO: ", data.hex())
+        print("HMAC TAG: ", hmac_tag.hex())
+        check = calculate_hmac(sym_key, salt_iv_ciphertext)
+        print(" Python Calculated HMAC: ", check.hex())
         print("HMAC verification failed!")
         return
+    else:
+        print("HMAC verification successful")
     
     # Decrypt the file using AES CBC mode
     print("Decrypting file")
@@ -123,6 +148,9 @@ def decrypt_file(sym_key, filename):
         dec_file.write(plaintext)
     
     print(f"Decrypted file saved as {filename[:-4]}.dec")
+
+
+
 
 def tcp_listener(port=SERVICE_PORT):
     global SYMMETRIC_KEY
