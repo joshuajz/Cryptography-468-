@@ -367,7 +367,9 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	theirPubHex := string(theirPubBytes[:n])                   // Convert bytes to a string
+	theirPubHex := string(theirPubBytes[:n]) // Convert bytes to a string
+	fmt.Printf("RAW RECEIVED DATA: %q\n", theirPubHex)
+
 	fmt.Printf("Received Public Key (Hex): %s\n", theirPubHex) // Log the received hex string
 	// Struct to hold the received JSON data
 	var data struct {
@@ -377,7 +379,7 @@ func handleConnection(conn net.Conn) {
 	// Unmarshal the JSON data into the struct
 	errr := json.Unmarshal([]byte(theirPubHex), &data)
 	if errr != nil {
-		log.Fatalf("Error unmarshalling JSON: %v", err)
+		log.Fatalf("Error unmarshalling JSON: %v", errr)
 	}
 
 	// Convert the hexadecimal string to a big.Int
@@ -419,7 +421,6 @@ func handleConnection(conn net.Conn) {
 	filename := fileParts[0]
 	filedata := []byte(fileParts[1])
 	log.Println("Received file: %s", filename)
-	decryptFile(key, filename)
 
 	f, err := os.Create("received_" + filename)
 	if err != nil {
