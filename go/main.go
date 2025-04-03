@@ -21,7 +21,8 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
-	"golang.org/x/crypto/scrypt"
+	//"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -122,12 +123,15 @@ func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 	// Derive a 32-byte key using scrypt
-	key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
-	if err != nil {
-		return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
-	}
+	// key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
+	// if err != nil {
+	// 	return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
+	// }
+	key := pbkdf2.Key(sharedSecret, salt, 100000, 32, sha256.New)
+	fmt.Printf("Go Derived Key: %x\n", key)
 
 	fmt.Printf("GO SHARED SECRET: %x\n", sharedSecret)
+	fmt.Printf("GO DERIVED KEY: %x\n", key)
 
 	return key, salt, nil
 }

@@ -47,7 +47,11 @@ def generate_dh_keypair():
     return p, g, private_key, public_key
 
 def compute_shared_secret(peer_public_key, private_key, p):
-    return pow(peer_public_key, private_key, p)
+    shared_secret = pow(peer_public_key, private_key, p)
+    shared_secret_bytes = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
+
+
+    return shared_secret_bytes
 
 def derive_key(shared_secret):
     # # Derive a key using the shared secret and scrypt (instead of PBKDF2)
@@ -62,11 +66,16 @@ def derive_key(shared_secret):
     salt = bytes(16)  # 16-byte salt (same as Go)
 
     # Ensure shared_secret is a byte array, like in Go
-    if isinstance(shared_secret, int):  
-        shared_secret = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')  # Ensure 32 bytes
+    # if isinstance(shared_secret, int):  
+    #     shared_secret = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')  # Ensure 32 bytes
 
-    key = scrypt(shared_secret, salt, 32, 8, 1, 32)  # Match Go's parameters
+    key = hashlib.pbkdf2_hmac('sha256', shared_secret, salt, 100000, dklen=32)  # Derive 32-byte key
+    print("Python Derived Key:", key.hex())
+    
+    # key = scrypt(shared_secret, salt, 32, 8, 1,32)  
+    print("PYTHON SALT: ", salt)
     print("PYTHON SHARED SECRET: ", shared_secret.hex())
+    print("PYTHON DERIVED KEY: ", key.hex())
 
     return key
 
