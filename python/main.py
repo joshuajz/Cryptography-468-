@@ -28,7 +28,6 @@ SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
 
 # Keys
-SYMMETRIC_KEY = None
 KEYS = {}
 
 # Shared Files
@@ -109,7 +108,6 @@ def decrypt_file(sym_key, filename):
     computed_hmac = hmac.new(sym_key, ciphertext, hashlib.sha256).digest()
     print('hmac_tag', hmac_tag, 'computed_hmac', computed_hmac)
     print("key:", sym_key)
-    print("key2:", SYMMETRIC_KEY)
 
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, ciphertext):
@@ -128,7 +126,6 @@ def decrypt_file(sym_key, filename):
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
 def tcp_listener(port=SERVICE_PORT):
-    global SYMMETRIC_KEY
     # Set up TCP listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
@@ -259,8 +256,6 @@ def send_file(ip, port, filename, symmetric_key):
         traceback.print_exc()
 
 def main():
-    global SYMMETRIC_KEY
-
     ip = get_ip()
     zeroconf = Zeroconf()
 
@@ -301,14 +296,13 @@ def integer_input(text):
             print("❌ Enter an integer.")
 
 def menu(listener: Listener):
-    global SYMMETRIC_KEY
     def print_peers():
         peers = list(listener.peers)
         for i, (name, peer_ip, peer_port) in enumerate(peers):
             print(f"[{i}] {name} at {peer_ip}:{peer_port}")
         return peers
 
-    print("Menu:")
+    print("\nMenu:")
     print("0. Peer List")
     print("1. Key Verification/Transfer")
     print("2. Send a File")
@@ -326,7 +320,6 @@ def menu(listener: Listener):
             
             peer_ip, peer_port = peers[peer_id][1], peers[peer_id][2]  # Get the chosen peer's IP and port
             
-            #! TODO: here is the key gen
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((peer_ip, peer_port))  # Connect to the peer
             p, g, private_key, public_key = generate_dh_keypair()
@@ -347,7 +340,6 @@ def menu(listener: Listener):
                 key = derive_key(shared_secret)
                 print("🔑 Key Derived:", key)
                 KEYS[f"{peer_ip}"] = key
-                SYMMETRIC_KEY = key
             else:
                 print("❌ No data returned from server for verification of key.")
         case 2: # 2. Send a File
@@ -369,6 +361,10 @@ def menu(listener: Listener):
                 print(f"🔗 Added {filename} to the Shared List.")
             else:
                 print(f"❌ {filename} does not exist.")
+        case 4: #4. Display shared files
+            print("Shared Files:")
+            for f in SHARED_FILES:
+                print(f"- {f}")
 
 if __name__ == "__main__":
     main()
