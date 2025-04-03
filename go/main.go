@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,12 +35,19 @@ const (
 var peers []map[string]interface{} // List of dictionaries (maps) to store peer information
 var (
 	// Predefined DH parameters
-	p, _ = new(big.Int).SetString("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
-		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
-		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
-		"E485B576625E7EC6F44C42E9A637A3620FFFFFFFFFFFFFFFF", 16)
+	p, _ = new(big.Int).SetString(
+		"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
+			"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
+			"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
+			"E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
+			"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"+
+			"C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"+
+			"83655D23DCA3AD961C62F356208552BB9ED529077096966D"+
+			"670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
 	g = big.NewInt(2)
 ) // Message buffer to store logs and predefined DH parameters
+
+var symmkeyGlobal []byte
 
 func getLocalIP() (string, error) {
 	// List of network interfaces
@@ -97,27 +108,184 @@ func generateDHKeyPair() (*big.Int, *big.Int) {
 }
 
 func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
+	// Calculate the shared secret using Diffie-Hellman
 	shared := new(big.Int).Exp(theirPub, myPriv, p)
-	hash := sha256.Sum256(shared.Bytes())
-	return hash[:]
+
+	// Return the raw bytes of the shared secret (no hashing)
+	return shared.Bytes()
 }
 
 // deriveKey derives a cryptographic key from the shared secret using scrypt
 func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 	// Generate a random salt (16 bytes)
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
+	salt := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x0, 0x0, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	// if _, err := rand.Read(salt); err != nil {
+	// 	return nil, nil, fmt.Errorf("failed to generate salt: %w", err)
+	// }
 
 	// Derive a 32-byte key using scrypt
-	key, err := scrypt.Key(sharedSecret, salt, 16384, 8, 1, 32)
+	key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
 	}
 
 	return key, salt, nil
 }
+
+// Encrypt file using AES and HMAC
+func encryptFile(key []byte, filename string) error {
+	// Generate random salt and IV for encryption
+	salt := make([]byte, 16)
+	iv := make([]byte, aes.BlockSize)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("failed to generate salt: %w", err)
+	}
+	if _, err := rand.Read(iv); err != nil {
+		return fmt.Errorf("failed to generate IV: %w", err)
+	}
+
+	// Read the file to be encrypted
+	plaintext, err := os.ReadFile(filename)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Create AES cipher block and encrypt the plaintext
+	fmt.Print("\n\nkey before NewCipher is called", key, "\n")
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	// Pad the plaintext to ensure it fits in AES block size
+	plaintext = append(plaintext, make([]byte, aes.BlockSize-len(plaintext)%aes.BlockSize)...)
+
+	ciphertext := make([]byte, len(plaintext))
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(ciphertext, plaintext)
+
+	// Calculate HMAC for the ciphertext
+	hmacHash := hmac.New(sha256.New, key)
+	hmacHash.Write(ciphertext)
+	hmacTag := hmacHash.Sum(nil)
+	fmt.Printf("HII:HMACHash:", hmacHash, "\nkey:", key, "\nciphertext:", ciphertext)
+	fmt.Printf("\n\nKey to encrypt the file: %x", key, "\n")
+
+	// Save the encrypted file with salt, IV, HMAC, and ciphertext
+	encFile := fmt.Sprintf("%s.enc", filename)
+	file, err := os.Create(encFile)
+	if err != nil {
+		return fmt.Errorf("failed to create encrypted file: %w", err)
+	}
+	defer file.Close()
+	fmt.Printf("FILE CREATED?")
+
+	_, err = file.Write(salt)
+	if err != nil {
+		return fmt.Errorf("failed to write salt: %w", err)
+	}
+
+	_, err = file.Write(iv)
+	if err != nil {
+		return fmt.Errorf("failed to write IV: %w", err)
+	}
+
+	_, err = file.Write(hmacTag)
+	if err != nil {
+		return fmt.Errorf("failed to write HMAC: %w", err)
+	}
+
+	_, err = file.Write(ciphertext)
+	if err != nil {
+		return fmt.Errorf("failed to write ciphertext: %w", err)
+	}
+
+	fmt.Printf("Salt: %s\n", hex.EncodeToString(salt))
+	fmt.Printf("IV: %s\n", hex.EncodeToString(iv))
+	fmt.Printf("HMAC Tag: %s\n", hex.EncodeToString(hmacTag))
+	fmt.Printf("Ciphertext: %s\n", hex.EncodeToString(ciphertext))
+	fmt.Printf("Symmetric Key: %s\n", key)
+
+	fmt.Printf("Encrypted File Information:\nsalt: %s\niv: %s\nhmacTag: %s\nciphertext: %s\n", salt, iv, hmacTag, ciphertext)
+
+	log.Printf("Encrypted file saved as %s\n", encFile)
+	return nil
+}
+
+// // decryptFile decrypts a file using the derived symmetric key and saves the decrypted content.
+// func decryptFile(symKey []byte, filename string) error {
+// 	// Read the encrypted file content
+// 	data, err := ioutil.ReadFile(filename)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	// Extract the components: salt, IV, HMAC tag, and ciphertext
+// 	iv := data[16:32]       // Extract IV (next 16 bytes)
+// 	hmacTag := data[32:64]  // Extract HMAC tag (next 32 bytes)
+// 	ciphertext := data[64:] // The remaining data is the ciphertext
+
+// 	// Verify the HMAC tag to ensure data integrity
+// 	if !verifyHMAC(symKey, ciphertext, hmacTag) {
+// 		return errors.New("HMAC verification failed")
+// 	}
+
+// 	// Decrypt the ciphertext using AES CBC
+// 	block, err := aes.NewCipher(symKey)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Check if the AES block size matches the expected size
+// 	if len(ciphertext)%aes.BlockSize != 0 {
+// 		return errors.New("ciphertext is not a multiple of block size")
+// 	}
+
+// 	// Decrypt the ciphertext using AES CBC
+// 	mode := cipher.NewCBCDecrypter(block, iv)
+// 	plaintext := make([]byte, len(ciphertext))
+// 	mode.CryptBlocks(plaintext, ciphertext)
+
+// 	// Unpad the plaintext
+// 	plaintext, err = unpad(plaintext, aes.BlockSize)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Write the decrypted file
+// 	decryptedFilename := filename[:len(filename)-4] + ".dec"
+// 	err = ioutil.WriteFile(decryptedFilename, plaintext, 0644)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	log.Printf("Decrypted file saved as %s", decryptedFilename)
+// 	return nil
+// }
+
+// // unpad removes padding from the plaintext
+// func unpad(data []byte, blockSize int) ([]byte, error) {
+// 	paddingLen := int(data[len(data)-1])
+// 	if paddingLen > blockSize || paddingLen == 0 {
+// 		return nil, errors.New("invalid padding")
+// 	}
+
+// 	return data[:len(data)-paddingLen], nil
+// }
+
+// // verifyHMAC compares the HMAC tag with the calculated HMAC for integrity verification
+// func verifyHMAC(key, data, expectedHMAC []byte) bool {
+// 	calculatedHMAC := hmac.New(sha256.New, key)
+// 	calculatedHMAC.Write(data)
+// 	return hmac.Equal(calculatedHMAC.Sum(nil), expectedHMAC)
+// }
+
+// // calculateHMAC calculates an HMAC with the given key and data using SHA256.
+// func calculateHMAC(key, data []byte) []byte {
+// 	hmacObj := hmac.New(sha256.New, key)
+// 	hmacObj.Write(data)
+// 	return hmacObj.Sum(nil)
+//}
 
 func startFileReceiver(port int) {
 	// Receive files on port
@@ -213,6 +381,7 @@ func handleConnection(conn net.Conn) {
 		log.Println("Failed to derive key:", err)
 		return
 	}
+	symmkeyGlobal = key
 	log.Printf("Derived key: %x\n", key)
 	log.Printf("Using salt: %x\n", salt)
 	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
@@ -275,7 +444,7 @@ func discoverServices() {
 	}
 
 	// Timeout mechanism to stop waiting if no peers are found within 10 seconds
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(1 * time.Second)
 
 	fmt.Println("Peers:")
 	index := 0
@@ -296,15 +465,13 @@ func discoverServices() {
 
 		case <-timeout:
 			// Timeout reached, stop waiting for services
-			fmt.Println("Timeout reached, finishing discovery.")
-			fmt.Println("Finish printing all of the peers")
 			close(entries) // Close the entries channel to stop the loop
 			return
 		}
 	}
 }
 
-func sendFile(peerIP string, peerPort int, filename string) {
+func sendFile(peerIP string, peerPort int, filename string, key []byte) {
 	// Open the file
 	file, err := os.Open(filename)
 	if err != nil {
@@ -321,18 +488,129 @@ func sendFile(peerIP string, peerPort int, filename string) {
 	}
 	defer conn.Close()
 
+	// Encrypt file
+	encryptFile(key, filename)
+
 	// Send the filename and file data
-	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", filename)))
+	encryptedFileName := filename + ".enc"
+	encryptedFileOpen, err := os.Open(encryptedFileName)
 	if err != nil {
 		log.Printf("❌ Failed to send filename")
 		return
 	}
-	_, err = io.Copy(conn, file)
+
+	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", encryptedFileName)))
+	if err != nil {
+		log.Printf("❌ Failed to send filename")
+		return
+	}
+	_, err = io.Copy(conn, encryptedFileOpen)
 	if err != nil {
 		log.Printf("❌ Failed to send file data")
 		return
 	}
 	log.Printf("✅ Sent file '%s' to %s:%d", filename, peerIP, peerPort)
+}
+
+func selectPeer() *map[string]interface{} {
+	var choice int
+	fmt.Print("Enter the number of the peer to send the public key to: ")
+	_, err := fmt.Scan(&choice)
+	if err != nil || choice < 0 || choice >= len(peers) {
+		fmt.Println("Invalid selection")
+		return nil
+	}
+
+	// Return the selected peer
+	return &peers[choice]
+}
+
+func menu() {
+	for {
+		// Display the menu
+		fmt.Println("Menu:")
+		fmt.Println("0. Peer List")
+		fmt.Println("1. Key Verification/Transfer")
+		fmt.Println("2. Send a File")
+		fmt.Println("3. Add File to Share")
+		fmt.Println("4. Display Shared Files")
+		fmt.Println("5. Request a Shared File")
+		fmt.Println("6. Exit")
+
+		var choice int
+		_, err := fmt.Scan(&choice)
+		if err != nil {
+			fmt.Println("Invalid input, please enter a number between 1 and 6.")
+			continue
+		}
+
+		// Switch based on user's choice
+		switch choice {
+		case 0: // 0. Peer List
+			discoverServices()
+		case 1: // 1. Key Verification/Transfer
+			discoverServices()
+			selectedPeer := selectPeer()
+			if selectedPeer == nil {
+				log.Println("❌ No valid peer selected. Exiting.")
+				return
+			}
+
+			peerIP := (*selectedPeer)["IP"].(string)
+			peerPort := (*selectedPeer)["Port"].(int)
+
+			conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", peerIP, peerPort))
+			if err != nil {
+				log.Printf("Error connecting to peer at %s:%d: %v", peerIP, peerPort, err)
+				return
+			}
+			defer conn.Close()
+
+			_, myPub := generateDHKeyPair()
+			response := map[string]string{
+				"public_key": myPub.String(), // Send the public key as a string (hex or decimal)
+			}
+
+			jsonData, err := json.Marshal(response)
+			if err != nil {
+				log.Println("Error encoding public key to JSON:", err)
+				return
+			}
+
+			_, err = conn.Write(jsonData)
+			if err != nil {
+				log.Println("Error sending public key:", err)
+				return
+			}
+
+			log.Println("Sent public key:", myPub.String())
+
+			// Handle receiving the peer's public key
+			handleConnection(conn)
+		case 2: // 2. Send a File
+			discoverServices()
+			selectedPeer := selectPeer()
+
+			peerIP := (*selectedPeer)["IP"].(string)
+			peerPort := (*selectedPeer)["Port"].(int)
+			fmt.Printf("📁 Enter the Filename to send to %s:%d: ", peerIP, peerPort)
+			var filename string
+			fmt.Scan(&filename)
+			sendFile(peerIP, peerPort, filename, symmkeyGlobal)
+		case 3:
+			fmt.Println("You selected Option 3")
+		case 4:
+			fmt.Println("You selected Option 4")
+		case 5:
+			fmt.Println("You selected Option 5")
+		case 6:
+			fmt.Println("Exiting...")
+			os.Exit(0) // Exit the program
+		default:
+			fmt.Println("Invalid Choice. Select a number between 0-6.")
+		}
+
+	}
 }
 
 func main() {
@@ -351,12 +629,17 @@ func main() {
 	go startFileReceiver(servicePort)
 
 	// Re-run the searcher every 10 seconds
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	// ticker := time.NewTicker(10 * time.Second)
+	// defer ticker.Stop()
 
 	// Discover services
-	discoverServices()
-	fmt.Print("HELLLLO")
+	// go discoverServices()
+
+	menu()
+
+	// NEED TO ADD:
+	// give user 2 options, either select peer to send file to or decrypt file
+	// if user selects decrypt file, they will enter file name to decrypt
 
 	// Allow user to select a peer and send a file
 	choice := -1
@@ -366,10 +649,10 @@ func main() {
 		peer := peers[choice]
 		peerIP := peer["IP"].(string)
 		peerPort := peer["Port"].(int)
-		fmt.Printf("Enter the filename to send to %s:%d: ", peerIP, peerPort)
+		fmt.Printf("📁 Enter the Filename to send to %s:%d: ", peerIP, peerPort)
 		var filename string
 		fmt.Scan(&filename)
-		sendFile(peerIP, peerPort, filename)
+		sendFile(peerIP, peerPort, filename, symmkeyGlobal)
 	} else {
 		log.Println("❌ Invalid peer selection")
 	}

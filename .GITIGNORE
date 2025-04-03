@@ -1,0 +1,5 @@
+file.txt.enc
+recieved_file.txt.enc
+*.enc
+go/file.txt.enc
+python/received_file.txt.enc
