@@ -72,27 +72,29 @@ def calculate_hmac(key, data):
     hmac_obj = hmac.new(key, data, SHA256)
     return hmac_obj.digest()
 
+
+
+
 def encrypt_file(key, filename):
     # CHANGE TO FIXED OR COMMUNICATED
-    salt = get_random_bytes(16)  # Generate a random salt
-    iv = get_random_bytes(AES.block_size)  # Generate a random IV
+    salt = bytes(b"1234567890abcdef")  # 16-byte salt
+    iv = bytes(b"fedcba0987654321")   # 16-byte IV
     
     # Read the file to encrypt
     with open(filename, 'rb') as f:
         plaintext = f.read()
     
     # Encrypt the file using AES CBC
-    cipher = AES.new(key, AES.MODE_CBC, iv) #! this is the error line
+    cipher = AES.new(key, AES.MODE_CBC, iv) 
     ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
+    salt_iv_ciphertext = salt + iv + ciphertext
     
     # Generate HMAC of the ciphertext
-    hmac_tag = calculate_hmac(key, ciphertext)
+    hmac_tag = calculate_hmac(key, salt_iv_ciphertext)
     
     # Write encrypted file with salt, IV, HMAC, and ciphertext
     with open(f'{filename}.enc', 'wb') as enc_file:
-        enc_file.write(salt)
-        enc_file.write(iv)
-        enc_file.write(ciphertext)
+        enc_file.write(salt_iv_ciphertext)
         enc_file.write(hmac_tag)
     
     print(f"Encrypted file saved as {filename}.enc")
