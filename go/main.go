@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -121,12 +122,6 @@ func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 	// Generate a random salt (16 bytes)
 	salt := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-
-	// Derive a 32-byte key using scrypt
-	// key, err := scrypt.Key(sharedSecret, salt, 32768, 8, 1, 32)
-	// if err != nil {
-	// 	return nil, nil, fmt.Errorf("scrypt key derivation failed: %w", err)
-	// }
 	key := pbkdf2.Key(sharedSecret, salt, 100000, 32, sha256.New)
 	fmt.Printf("Go Derived Key: %x\n", key)
 
@@ -134,6 +129,13 @@ func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
 	fmt.Printf("GO DERIVED KEY: %x\n", key)
 
 	return key, salt, nil
+}
+
+// PKCS7 padding function (same as the one used in Python's Crypto.Util.Padding)
+func pkcs7Padding(data []byte, blockSize int) []byte {
+	padding := blockSize - len(data)%blockSize
+	padText := bytes.Repeat([]byte{byte(padding)}, padding)
+	return append(data, padText...)
 }
 
 // Encrypt file using AES and HMAC
@@ -156,7 +158,7 @@ func encryptFile(key []byte, filename string) error {
 	}
 
 	// Pad the plaintext to ensure it fits in AES block size
-	plaintext = append(plaintext, make([]byte, aes.BlockSize-len(plaintext)%aes.BlockSize)...)
+	plaintext = pkcs7Padding(plaintext, aes.BlockSize)
 
 	ciphertext := make([]byte, len(plaintext))
 	mode := cipher.NewCBCEncrypter(block, iv)
