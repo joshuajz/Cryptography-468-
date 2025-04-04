@@ -81,7 +81,7 @@ def calculate_hmac(key, data):
 def encrypt_file(key, filename):
     # CHANGE TO FIXED OR COMMUNICATED
     salt = bytes(b"1234567890abcdef")  # 16-byte salt
-    iv = bytes(b"fedcba0987654321")   # 16-byte IV
+    iv = bytes(b"fedcba098b765432")   # 16-byte IV
     
     # Read the file to encrypt
     with open(filename, 'rb') as f:
@@ -150,78 +150,140 @@ def decrypt_file(sym_key, filename):
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
 
+def handle_client_connection(connection, address):
+    buffer = b""
+
+    while True:
+        chunk = connection.recv(4096)
+
+        if not chunk:
+            break # connection probably closed
+            
+        buffer += chunk
+
+        # Checking if the message is a key
+        try:
+            print('b4 msg load')
+            message = json.loads(buffer)
+            print('after msg load')
+            if "public_key" in message:
+                public_key = message["public_key"]
+                print(f"🔑 Received a public key from {address[0]}:{address[1]}: {message['public_key']}")
+
+                # Store the symmetric key
+                p, g, private_key, public_key = generate_dh_keypair()
+                print('public key:', message["public_key"])
+                shared_secret = compute_shared_secret(int(message['public_key']), private_key, p)
+                # shared_secret = compute_shared_secret(private_key, message['public_key'], p)
+                derived_key = derive_key(shared_secret)
+                KEYS[f"{address[0]}"] = derived_key
+
+                # Send our public key back to the client (DH exchange)
+                public_key_hex = hex(public_key)  # Convert the public key to a hex string
+                connection.sendall(json.dumps({'public_key': public_key_hex}).encode())
+                print("📨 Sent Public Key to client:", public_key)
+                return
+        except:
+            print("JSON DECODE ERROR TRIGGER")
+            if b"\n" in buffer:
+                filename, filedata = buffer.split(b"\n", 1)
+                filename = filename.decode(errors="ignore")  # Handle any invalid UTF-8 characters
+
+                # Save the file to disk
+                with open(f"received_{filename}", "wb") as f:
+                    f.write(filedata)
+
+                # Check if a symmetric key is available for decryption
+                if address[0] in KEYS:
+                    # In a real scenario, you'd derive the symmetric key based on the public key
+                    sym_key = KEYS[address[0]]  # For now, just using public_key directly as a placeholder
+                    print(f"🔓 Decrypting file {filename} using symmetric key.")
+                    decrypt_file(sym_key, f"received_{filename}")
+                else:
+                    print(f"❌🛡️ No symmetric key found for {address[0]}, unable to decrypt the file.")
 
 
 def tcp_listener(port=SERVICE_PORT):
-    # Set up TCP listening port
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
-    sock.listen(1)
-    print(f"👍 Listening for TCP file transfers on port {port}.")
+    sock.listen(5)
+    print(f"Listening on port {port} for incoming connections...")
 
     while True:
-        # Accept connection and check for file transfer
         conn, addr = sock.accept()
-        with conn:
-            print(f"Connection from {addr}")
-            buffer = b""
+        handle_client_connection(conn, addr)
+        conn.close()
+    
+    # Set up TCP listening port
+    # sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # sock.bind(('', port))
+    # sock.listen(1)
+    # print(f"👍 Listening for TCP file transfers on port {port}.")
 
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break  # No more data received, close the connection
+    # while True:
+    #     # Accept connection and check for file transfer
+    #     conn, addr = sock.accept()
+    #     with conn:
+    #         print(f"Connection from {addr}")
+    #         buffer = b""
 
-                buffer += chunk
+    #         while True:
+    #             chunk = conn.recv(4096)
+    #             if not chunk:
+    #                 break  # No more data received, close the connection
 
-                try:
-                    # Try to load the chunk as JSON to check for a public key
-                    # Attempt to decode the buffer only if it's likely JSON data
-                    try:
-                        chunkJSON = json.loads(buffer)
-                        if 'public_key' in chunkJSON:
-                            print(f"🔑 Received a public key from {addr[0]}:{addr[1]}: {chunkJSON['public_key']}")
+    #             buffer += chunk
 
-                            # Derive the symmetric key from the public key
-                            derived_key = derive_key(chunkJSON['public_key'])
-                            KEYS[f"{addr[0]}"] = derived_key
+    #             try:
+    #                 # Try to load the chunk as JSON to check for a public key
+    #                 # Attempt to decode the buffer only if it's likely JSON data
+    #                 try:
+    #                     chunkJSON = json.loads(buffer)
+    #                     if 'public_key' in chunkJSON:
+    #                         print(f"🔑 Received a public key from {addr[0]}:{addr[1]}: {chunkJSON['public_key']}")
 
-                            # Send our public key back to the client (DH exchange)
-                            p, g, private_key, public_key = generate_dh_keypair()
-                            public_key_hex = hex(public_key)  # Convert the public key to a hex string
-                            conn.sendall(json.dumps({'public_key': public_key_hex}).encode())
-                            print("📨 Sent Public Key to client:", public_key)
+    #                         # Derive the symmetric key from the public key
+    #                         shared_secret = compute_shared_secret(private_key, chunkJSON['public_key'])
+    #                         derived_key = derive_key(shared_secret)
+    #                         KEYS[f"{addr[0]}"] = derived_key
 
-                            buffer = b""  # Reset the buffer after processing the JSON message
-                            continue  # Proceed to the next iteration to listen for more data
-                    except json.JSONDecodeError:
-                        # If it's not JSON, we'll treat it as file data
-                        pass
+    #                         # Send our public key back to the client (DH exchange)
+    #                         p, g, private_key, public_key = generate_dh_keypair()
+    #                         public_key_hex = hex(public_key)  # Convert the public key to a hex string
+    #                         conn.sendall(json.dumps({'public_key': public_key_hex}).encode())
+    #                         print("📨 Sent Public Key to client:", public_key)
 
-                    # If buffer contains a newline, assume it's a file transfer
-                    if b"\n" in buffer:
-                        filename, filedata = buffer.split(b"\n", 1)
-                        filename = filename.decode(errors="ignore")  # Ignore invalid UTF-8 characters
+    #                         buffer = b""  # Reset the buffer after processing the JSON message
+    #                         continue  # Proceed to the next iteration to listen for more data
+    #                 except json.JSONDecodeError:
+    #                     # If it's not JSON, we'll treat it as file data
+    #                     pass
 
-                        # Save the file received
-                        with open(f"received_{filename}", "wb") as f:
-                            f.write(filedata)
+    #                 # If buffer contains a newline, assume it's a file transfer
+    #                 if b"\n" in buffer:
+    #                     filename, filedata = buffer.split(b"\n", 1)
+    #                     filename = filename.decode(errors="ignore")  # Ignore invalid UTF-8 characters
 
-                        # Check if we have a symmetric key for this address
-                        if f"{addr[0]}" in KEYS:
-                            sym_key = KEYS[f"{addr[0]}"]
-                            if sym_key:
-                                # Decrypt the file using the symmetric key
-                                print(f"Decrypting file '{filename}' using symmetric key.")
-                                decrypt_file(sym_key, f"received_{filename}")
-                                print(f"✅ Received and processed file '{filename}' from {addr}")
-                            else:
-                                print(f"❌ No symmetric key available for {addr}. File decryption failed.")
-                        else:
-                            print(f"❌ No symmetric key found for {addr}. Unable to decrypt the file.")
+    #                     # Save the file received
+    #                     with open(f"received_{filename}", "wb") as f:
+    #                         f.write(filedata)
 
-                        buffer = b""  # Reset the buffer after processing the file
-                except Exception as e:
-                    print(f"Error processing buffer: {e}")
+    #                     # Check if we have a symmetric key for this address
+    #                     if f"{addr[0]}" in KEYS:
+    #                         sym_key = KEYS[f"{addr[0]}"]
+    #                         if sym_key:
+    #                             # Decrypt the file using the symmetric key
+    #                             print(f"Decrypting file '{filename}' using symmetric key.")
+    #                             decrypt_file(sym_key, f"received_{filename}")
+    #                             print(f"✅ Received and processed file '{filename}' from {addr}")
+    #                         else:
+    #                             print(f"❌ No symmetric key available for {addr}. File decryption failed.")
+    #                     else:
+    #                         print(f"❌ No symmetric key found for {addr}. Unable to decrypt the file.")
+
+    #                     buffer = b""  # Reset the buffer after processing the file
+    #             except Exception as e:
+    #                 print(f"Error processing buffer: {e}")
 
 
 def get_ip():

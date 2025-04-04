@@ -142,7 +142,7 @@ func pkcs7Padding(data []byte, blockSize int) []byte {
 func encryptFile(key []byte, filename string) error {
 
 	salt := []byte("1234567890abcdef") // 16-byte fixed salt
-	iv := []byte("fedcba098b7654321")  // 16-byte fixed IV
+	iv := []byte("fedcba098b765432")   // 16-byte fixed IV
 
 	// Read the file to be encrypted
 	plaintext, err := os.ReadFile(filename)
