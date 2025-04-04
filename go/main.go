@@ -8,7 +8,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,7 +21,6 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
-	//"golang.org/x/crypto/scrypt"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -34,7 +32,9 @@ const (
 	servicePort   = 12346
 )
 
-var peers []map[string]interface{} // List of dictionaries (maps) to store peer information
+// Store peer information
+var peers []map[string]interface{}
+
 var (
 	// Predefined DH parameters
 	p, _ = new(big.Int).SetString(
@@ -47,12 +47,15 @@ var (
 			"83655D23DCA3AD961C62F356208552BB9ED529077096966D"+
 			"670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
 	g = big.NewInt(2)
-) // Message buffer to store logs and predefined DH parameters
+)
 
+// Stores keys & shared files
 var keysMap map[string][]byte
 var sharedFiles [][]string
 
 func getLocalIP() (string, error) {
+	// Provides the local IP for this program (useful for debugging)
+
 	// List of network interfaces
 	interfaces, err := net.Interfaces()
 	if err != nil {
@@ -76,7 +79,7 @@ func getLocalIP() (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("no suitable network interface found")
+	return "", fmt.Errorf("❌ No suitable network interface found")
 }
 
 func startResponder() (*zeroconf.Server, error) {
@@ -105,6 +108,7 @@ func startResponder() (*zeroconf.Server, error) {
 }
 
 func generateDHKeyPair() (*big.Int, *big.Int) {
+	// Generates a DHKE pair
 	priv, _ := rand.Int(rand.Reader, p)
 	pub := new(big.Int).Exp(g, priv, p)
 	return priv, pub
@@ -118,29 +122,26 @@ func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
 	return shared.Bytes()
 }
 
-// deriveKey derives a cryptographic key from the shared secret using scrypt
 func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
+	// Derives a cryptographic key from a shared secret
+
 	// Generate a random salt (16 bytes)
 	salt := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	key := pbkdf2.Key(sharedSecret, salt, 100000, 32, sha256.New)
-	fmt.Printf("Go Derived Key: %x\n", key)
-
-	fmt.Printf("GO SHARED SECRET: %x\n", sharedSecret)
-	fmt.Printf("GO DERIVED KEY: %x\n", key)
 
 	return key, salt, nil
 }
 
-// PKCS7 padding function (same as the one used in Python's Crypto.Util.Padding)
 func pkcs7Padding(data []byte, blockSize int) []byte {
+	// Adds PKCS7 padding
 	padding := blockSize - len(data)%blockSize
 	padText := bytes.Repeat([]byte{byte(padding)}, padding)
 	return append(data, padText...)
 }
 
-// Encrypt file using AES and HMAC
 func encryptFile(key []byte, filename string) error {
+	// Encrypts a file using AES and HMAC
 
 	salt := []byte("1234567890abcdef") // 16-byte fixed salt
 	iv := []byte("fedcba098b765432")   // 16-byte fixed IV
@@ -148,14 +149,13 @@ func encryptFile(key []byte, filename string) error {
 	// Read the file to be encrypted
 	plaintext, err := os.ReadFile(filename)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return fmt.Errorf("❌ Failed to read file: %w", err)
 	}
 
 	// Create AES cipher block and encrypt the plaintext
-
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return fmt.Errorf("failed to create AES cipher: %w", err)
+		return fmt.Errorf("❌ Failed to create AES cipher: %w", err)
 	}
 
 	// Pad the plaintext to ensure it fits in AES block size
@@ -168,68 +168,52 @@ func encryptFile(key []byte, filename string) error {
 	// Calculate HMAC for the ciphertext
 	hmacHash := hmac.New(sha256.New, key)
 	dataForHMAC := append(append(salt, iv...), ciphertext...)
-	fmt.Printf("DATAFORHMAC: %x\n", dataForHMAC)
-	fmt.Println("Go HMAC Data Length:", len(dataForHMAC))
-
 	hmacHash.Reset()
 	hmacHash.Write(dataForHMAC)
 	hmacTag := hmacHash.Sum(nil)
-	fmt.Println("Go Data Length:", len(dataForHMAC))
-	fmt.Println("Go Key Length:", len(key))
-	fmt.Printf("Go HMAC: %x\n", hmacTag)
-	fmt.Printf("HII:HMACHash:", hmacHash, "\nkey:", key, "\nciphertext:", ciphertext)
 
 	// Save the encrypted file with salt, IV, HMAC, and ciphertext
 	encFile := fmt.Sprintf("%s.enc", filename)
 	file, err := os.Create(encFile)
 	if err != nil {
-		return fmt.Errorf("failed to create encrypted file: %w", err)
+		return fmt.Errorf("❌ Failed to create encrypted file: %w", err)
 	}
 	defer file.Close()
-	fmt.Printf("FILE CREATED?")
 
 	_, err = file.Write(salt)
 	if err != nil {
-		return fmt.Errorf("failed to write salt: %w", err)
+		return fmt.Errorf("❌ failed to write salt: %w", err)
 	}
 
 	_, err = file.Write(iv)
 	if err != nil {
-		return fmt.Errorf("failed to write IV: %w", err)
+		return fmt.Errorf("❌ Failed to write IV: %w", err)
 	}
 
 	_, err = file.Write(ciphertext)
 	if err != nil {
-		return fmt.Errorf("failed to write ciphertext: %w", err)
+		return fmt.Errorf("❌ Failed to write ciphertext: %w", err)
 	}
 
 	_, err = file.Write(hmacTag)
 	if err != nil {
-		return fmt.Errorf("failed to write HMAC: %w", err)
+		return fmt.Errorf("❌ Failed to write HMAC: %w", err)
 	}
 
-	fmt.Printf("Salt: %s\n", hex.EncodeToString(salt))
-	fmt.Printf("IV: %s\n", hex.EncodeToString(iv))
-	fmt.Printf("HMAC Tag: %s\n", hex.EncodeToString(hmacTag))
-	fmt.Printf("Ciphertext: %s\n", hex.EncodeToString(ciphertext))
-	//fmt.Printf("Symmetric Key: %s\n", key)
-	fmt.Printf("Derived Key in Go: %x\n", key)
-
-	//fmt.Printf("Encrypted File Information:\nsalt: %s\niv: %s\nhmacTag: %s\nciphertext: %s\n", salt, iv, hmacTag, ciphertext)
-
-	log.Printf("Encrypted file saved as %s\n", encFile)
+	log.Printf("📁 Encrypted file saved as %s\n", encFile)
 	return nil
 }
 
-// calculateHMAC computes HMAC-SHA256
 func calculateHMAC(key, data []byte) []byte {
+	// Calculate HMAC with SHA256
 	h := hmac.New(sha256.New, key)
 	h.Write(data)
 	return h.Sum(nil)
 }
 
-// decryptFile decrypts the given encrypted file
 func decryptFile(key []byte, filename string) error {
+	// Decrypts and encrypted file
+
 	const (
 		SALT_SIZE = 16
 		IV_SIZE   = 16
@@ -239,12 +223,12 @@ func decryptFile(key []byte, filename string) error {
 	// Read encrypted file
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
+		return fmt.Errorf("❌ failed to read encrypted file: %w", err)
 	}
 
 	// Ensure the file is at least large enough to contain salt, IV, HMAC, and some ciphertext
 	if len(data) < SALT_SIZE+IV_SIZE+HMAC_SIZE {
-		return fmt.Errorf("file is too short to be valid")
+		return fmt.Errorf("❌ file is too short to be valid")
 	}
 
 	// Extract components
@@ -257,19 +241,20 @@ func decryptFile(key []byte, filename string) error {
 	saltIVCiphertext := append(append(salt, iv...), ciphertext...)
 	calculatedHMAC := calculateHMAC(key, saltIVCiphertext)
 	if !hmac.Equal(hmacTag, calculatedHMAC) {
-		return fmt.Errorf("HMAC verification failed")
+		return fmt.Errorf("❌ HMAC verification failed")
 	}
-	fmt.Println("HMAC verification successful")
+
+	fmt.Println("✅ HMAC verification successful")
 
 	// Create AES cipher block
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return fmt.Errorf("failed to create AES cipher: %w", err)
+		return fmt.Errorf("❌ failed to create AES cipher: %w", err)
 	}
 
 	// Decrypt using AES CBC
 	if len(ciphertext)%aes.BlockSize != 0 {
-		return fmt.Errorf("ciphertext is not a multiple of AES block size")
+		return fmt.Errorf("❌ ciphertext is not a multiple of AES block size")
 	}
 	mode := cipher.NewCBCDecrypter(block, iv)
 	plaintext := make([]byte, len(ciphertext))
@@ -278,59 +263,65 @@ func decryptFile(key []byte, filename string) error {
 	// Unpad using PKCS7
 	plaintext, err = pkcs7Unpad(plaintext, aes.BlockSize)
 	if err != nil {
-		return fmt.Errorf("unpadding failed: %w", err)
+		return fmt.Errorf("❌ unpadding failed: %w", err)
 	}
 
 	// Save decrypted file
 	outputFilename := filename[:len(filename)-4] + ".dec"
 	err = os.WriteFile(outputFilename, plaintext, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to save decrypted file: %w", err)
+		return fmt.Errorf("❌ failed to save decrypted file: %w", err)
 	}
 
-	fmt.Printf("Decrypted file saved as %s\n", outputFilename)
+	fmt.Printf("✅ Decrypted file saved as %s\n", outputFilename)
 	return nil
 }
 
-// pkcs7Unpad removes PKCS7 padding
 func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
+	// Removes PKCS7 padding
+
 	if len(data) == 0 {
-		return nil, fmt.Errorf("invalid padding size")
+		return nil, fmt.Errorf("❌ invalid padding size")
 	}
+
 	padding := int(data[len(data)-1])
 	if padding > blockSize || padding == 0 {
-		return nil, fmt.Errorf("invalid padding")
+		return nil, fmt.Errorf("❌ invalid padding")
 	}
+
 	for i := len(data) - padding; i < len(data); i++ {
 		if data[i] != byte(padding) {
-			return nil, fmt.Errorf("invalid padding")
+			return nil, fmt.Errorf("❌ invalid padding")
 		}
 	}
+
 	return data[:len(data)-padding], nil
 }
 
 func startFileReceiver(port int) {
 	// Receive files on port
+
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port)) // Binding to all interfaces
 	if err != nil {
-		log.Fatalf("Failed to start TCP listener: %v", err)
+		log.Fatalf("❌ Failed to start TCP listener: %v", err)
 	}
-	log.Printf("Listening for file transfers on TCP port %d...", port)
+	log.Printf("👂 Listening for file transfers on TCP port %d...", port)
 
 	// Accept incoming connections
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Println("Error accepting connection:", err)
+			log.Println("❌ Error accepting connection:", err)
 			continue
 		}
+
 		// Asynchronously handle each file transfer
-		fmt.Println("CALLING HANDLE CONNECTIONS FUNCTION")
 		go handleConnection(conn)
 	}
 }
 
 func handleConnection(conn net.Conn) {
+	// Handles an incoming connection
 	defer conn.Close()
 
 	buffer := make([]byte, 4096) // Buffer to receive data
@@ -338,7 +329,7 @@ func handleConnection(conn net.Conn) {
 	// Read incoming data
 	n, err := conn.Read(buffer)
 	if err != nil {
-		log.Println("Error reading data:", err)
+		log.Println("❌ Error reading data:", err)
 		return
 	}
 
@@ -349,12 +340,9 @@ func handleConnection(conn net.Conn) {
 	err = json.Unmarshal(data, &message)
 	clientIP := conn.RemoteAddr().String()
 
-	fmt.Printf("Parsed JSON: %s\n\n", message)
-	fmt.Printf("Does the value exist?: %s", message["request"])
-
 	if err == nil && message["public_key"] != "" {
 		// If it's a public key, store it
-		log.Printf("Received public key from %s: %s", clientIP, message["public_key"])
+		log.Printf("🔑 Received public key from %s: %s", clientIP, message["public_key"])
 
 		myPriv, myPub := generateDHKeyPair()
 
@@ -366,24 +354,22 @@ func handleConnection(conn net.Conn) {
 		// Convert the response into JSON
 		jsonData, err := json.Marshal(response)
 		if err != nil {
-			log.Println("Error encoding JSON:", err)
+			log.Println("❌ Error encoding JSON:", err)
 			return
 		}
 
 		_, err = conn.Write(jsonData)
 		if err != nil {
-			log.Println("Error sending public key:", err)
+			log.Println("❌ Error sending public key:", err)
 			return
 		}
 
-		log.Printf("Sent public key to %s: %s", clientIP, myPub.String())
-
-		// publicKey, ok := new(big.Int).SetString(data.PublicKey[2:], 16) // Remove "0x" prefix and convert to big.Int
+		log.Printf("🔑 Sent public key to %s: %s", clientIP, myPub.String())
 
 		// Now compute the shared secret using the other peer's public key
 		peerPub, ok := new(big.Int).SetString(message["public_key"][2:], 16)
 		if !ok {
-			log.Println("Failed to convert peer's public key")
+			log.Println("❌ Failed to convert peer's public key")
 			return
 		}
 
@@ -393,13 +379,12 @@ func handleConnection(conn net.Conn) {
 		// Derive symmetric key from the shared secret
 		symmKey, _, err := deriveKey(sharedSecret)
 		if err != nil {
-			log.Println("Error deriving symmetric key:", err)
+			log.Println("❌ Error deriving symmetric key:", err)
 			return
 		}
 
 		// Store the symmetric key for future use
 		keysMap[clientIP] = symmKey
-		log.Printf("Symmetric key derived and stored for %s", clientIP)
 		return
 	}
 	if err == nil && message["request"] == "file_list" {
@@ -410,34 +395,31 @@ func handleConnection(conn net.Conn) {
 
 		jsonData, err := json.Marshal(response)
 		if err != nil {
-			log.Println("Error encoding JSON:", err)
-			return
-		}
-
-		fmt.Printf("JSON DATA: %s, %v", string(jsonData), jsonData)
-
-		_, err = conn.Write(jsonData)
-		if err != nil {
-			log.Println("Error sending file list:", err)
+			log.Println("❌ Error encoding JSON:", err)
 			return
 		}
 
 		_, err = conn.Write(jsonData)
 		if err != nil {
-			log.Println("Error sending file list:", err)
+			log.Println("❌ Error sending file list:", err)
 			return
 		}
-		fmt.Printf("\nSuccessfully wrote jsondata\n")
+
+		_, err = conn.Write(jsonData)
+		if err != nil {
+			log.Println("❌ Error sending file list:", err)
+			return
+		}
 		return
 	}
 
 	// If it's not a public key, assume it's a file
-	log.Println("Receiving file data from", clientIP)
+	log.Println("📨 Receiving file data from", clientIP)
 
 	// File data should be in the form of filename + newline + file data
 	parts := bytes.SplitN(data, []byte("\n"), 2)
 	if len(parts) < 2 {
-		log.Println("Invalid file format")
+		log.Println("❌ Invalid file format")
 		return
 	}
 
@@ -447,20 +429,20 @@ func handleConnection(conn net.Conn) {
 	// Save the file data to disk
 	file, err := os.Create("received_" + filename)
 	if err != nil {
-		log.Println("Error creating file:", err)
+		log.Println("❌ Error creating file:", err)
 		return
 	}
 	defer file.Close()
 
 	_, err = file.Write(filedata)
 	if err != nil {
-		log.Println("Error writing file:", err)
+		log.Println("❌ Error writing file:", err)
 		return
 	}
 
 	// Decrypt the file using the symmetric key
 	if keysMap[clientIP] == nil {
-		log.Println("No symmetric key available for decryption")
+		log.Println("❌ No symmetric key available for decryption")
 		return
 	}
 
@@ -476,7 +458,7 @@ func discoverServices() {
 	}
 
 	// Discover all _ping._tcp. peers
-	serviceType := "_ping._tcp." // Match the service type advertised by Python and Go peers
+	serviceType := "_ping._tcp."
 
 	// Create a context to pass to the resolver
 	ctx := context.Background()
@@ -514,18 +496,20 @@ func discoverServices() {
 			index++
 
 		case <-timeout:
-			// Timeout reached, stop waiting for services
-			close(entries) // Close the entries channel to stop the loop
+			// Timeout reached
+			close(entries)
 			return
 		}
 	}
 }
 
 func sendFile(peerIP string, peerPort int, filename string, key []byte) {
+	// Send files
+
 	// Open the file
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Printf("❌File '%s' not found", filename)
+		log.Printf("❌ File '%s' not found", filename)
 		return
 	}
 	defer file.Close()
@@ -533,7 +517,7 @@ func sendFile(peerIP string, peerPort int, filename string, key []byte) {
 	// Connect
 	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", peerIP, peerPort))
 	if err != nil {
-		log.Printf("❌Could not connect to peer at %s:%d", peerIP, peerPort)
+		log.Printf("❌ Could not connect to peer at %s:%d", peerIP, peerPort)
 		return
 	}
 	defer conn.Close()
@@ -679,6 +663,8 @@ func menu() {
 		case 5:
 			fmt.Println("You selected Option 5")
 		case 6:
+			fmt.Println("You selected Option 6")
+		case 7:
 			fmt.Println("Exiting...")
 			os.Exit(0) // Exit the program
 		default:
