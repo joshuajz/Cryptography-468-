@@ -29,7 +29,10 @@ SERVICE_NAME = "PythonPeer._ping._tcp.local."
 SERVICE_PORT = 12345
 
 # Keys
-SYMMETRIC_KEY = None
+KEYS = {}
+
+# Shared Files
+SHARED_FILES = []
 
 def generate_dh_keypair():
     # Standard 2048-bit safe prime for DHKE (can be changed to a larger prime if needed)
@@ -50,7 +53,6 @@ def compute_shared_secret(peer_public_key, private_key, p):
     shared_secret = pow(peer_public_key, private_key, p)
     shared_secret_bytes = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
 
-
     return shared_secret_bytes
 
 def derive_key(shared_secret):
@@ -58,8 +60,7 @@ def derive_key(shared_secret):
 
 
     key = hashlib.pbkdf2_hmac('sha256', shared_secret, salt, 100000, dklen=32)  # Derive 32-byte key
-    print("Python Derived Key:", key.hex())
-    print("PYTHON SALT: ", salt)
+
     print("PYTHON SHARED SECRET: ", shared_secret.hex())
     print("PYTHON DERIVED KEY: ", key.hex())
 
@@ -74,35 +75,30 @@ def calculate_hmac(key, data):
 
 def encrypt_file(key, filename):
     # CHANGE TO FIXED OR COMMUNICATED
-    salt = get_random_bytes(16)  # Generate a random salt
-    iv = get_random_bytes(AES.block_size)  # Generate a random IV
+    salt = bytes(b"1234567890abcdef")  # 16-byte salt
+    iv = bytes(b"fedcba098b765432")   # 16-byte IV
     
     # Read the file to encrypt
     with open(filename, 'rb') as f:
         plaintext = f.read()
     
     # Encrypt the file using AES CBC
-    cipher = AES.new(key, AES.MODE_CBC, iv) #! this is the error line
+    cipher = AES.new(key, AES.MODE_CBC, iv) 
     ciphertext = cipher.encrypt(pad(plaintext, AES.block_size))
+    salt_iv_ciphertext = salt + iv + ciphertext
     
     # Generate HMAC of the ciphertext
-    hmac_tag = calculate_hmac(key, ciphertext)
+    hmac_tag = calculate_hmac(key, salt_iv_ciphertext)
     
     # Write encrypted file with salt, IV, HMAC, and ciphertext
     with open(f'{filename}.enc', 'wb') as enc_file:
-        enc_file.write(salt)
-        enc_file.write(iv)
-        enc_file.write(ciphertext)
+        enc_file.write(salt_iv_ciphertext)
         enc_file.write(hmac_tag)
     
-    print(f"Encrypted file saved as {filename}.enc")
-
-
-
-
+    print(f"🔒 Encrypted File As {filename}.enc")
 
 def decrypt_file(sym_key, filename):
-    print("DECRYPT FILE SYMMETRIC KEY:", sym_key, "/n")
+
     print("Decrypting the file")
     with open(filename, 'rb') as f:
         data = f.read()
@@ -117,17 +113,14 @@ def decrypt_file(sym_key, filename):
     hmac_tag = data[-HMAC_SIZE:]  # Extract hmac
     salt_iv_ciphertext = salt + iv + ciphertext
 
-    print("SALTIVCIPHER: ", salt_iv_ciphertext.hex())
-
 
 
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, salt_iv_ciphertext):
 
-        print("DATA RETREIVED FROM GO: ", data.hex())
-        print("HMAC TAG: ", hmac_tag.hex())
+
         check = calculate_hmac(sym_key, salt_iv_ciphertext)
-        print(" Python Calculated HMAC: ", check.hex())
+
         print("HMAC verification failed!")
         return
     else:
@@ -144,41 +137,72 @@ def decrypt_file(sym_key, filename):
     
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
-
-
-
-def tcp_listener(port=SERVICE_PORT):
-    global SYMMETRIC_KEY
-    # sets up tcp listening port
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(('', port))
-    sock.listen(1)
-    print(f"Listening for TCP file transfers on port {port}...")
-
+def handle_client_connection(connection, address):
+    print(f"Connection from {address[0]}:{address[1]}")
+    
+    buffer = b""
+    print('buffer:', buffer)
     while True:
-        # displays current connection and checks for file transfer
-        conn, addr = sock.accept()
-        with conn:
-            print(f"Connection from {addr}")
-            buffer = b""
-            while True:
-                chunk = conn.recv(4096)
-                if not chunk:
-                    break
-                buffer += chunk
+        chunk = connection.recv(4096)
 
+        if not chunk:
+            break # connection probably closed
+            
+        buffer += chunk
+
+        # Checking if the message is a key
+        try:
+         
+            message = json.loads(buffer)
+      
+            if "public_key" in message:
+                public_key = message["public_key"]
+                print(f"🔑 Received a public key from {address[0]}:{address[1]}: {message['public_key']}")
+
+                # Store the symmetric key
+                p, g, private_key, public_key = generate_dh_keypair()
+                print('public key:', message["public_key"])
+                shared_secret = compute_shared_secret(int(message['public_key']), private_key, p)
+                # shared_secret = compute_shared_secret(private_key, message['public_key'], p)
+                derived_key = derive_key(shared_secret)
+                KEYS[f"{address[0]}"] = derived_key
+
+                # Send our public key back to the client (DH exchange)
+                public_key_hex = hex(public_key)  # Convert the public key to a hex string
+                connection.sendall(json.dumps({'public_key': public_key_hex}).encode())
+                print("📨 Sent Public Key to client:", public_key)
+                return
+            elif "files" in message:
+                print('message', message)
+        except:
             if b"\n" in buffer:
-                # if file is sent, download it
                 filename, filedata = buffer.split(b"\n", 1)
-                filename = filename.decode()
+                filename = filename.decode(errors="ignore")  # Handle any invalid UTF-8 characters
+
+                # Save the file to disk
                 with open(f"received_{filename}", "wb") as f:
                     f.write(filedata)
 
-                # NEED TO CHANGE TO USING DERIVED KEY
-                # decryption_key = derive_key(SYMMETRIC_KEY)
-                decrypt_file(SYMMETRIC_KEY, f"received_{filename}")
-                
-                print(f"✅ Received file '{filename}' from {addr}")
+                # Check if a symmetric key is available for decryption
+                if address[0] in KEYS:
+                    # In a real scenario, you'd derive the symmetric key based on the public key
+                    sym_key = KEYS[address[0]]  # For now, just using public_key directly as a placeholder
+                    print(f"🔓 Decrypting file {filename} using symmetric key.")
+                    decrypt_file(sym_key, f"received_{filename}")
+                else:
+                    print(f"❌🛡️ No symmetric key found for {address[0]}, unable to decrypt the file.")
+
+def tcp_listener(port=SERVICE_PORT):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('', port))
+    sock.listen(5)
+    print(f"Listening on port {port} for incoming connections...")
+
+    while True:
+        conn, addr = sock.accept()
+        print("Calling handle connection")
+        handle_client_connection(conn, addr)
+        conn.close()
 
 def get_ip():
     # get IP connections
@@ -230,7 +254,7 @@ def send_file(ip, port, filename, symmetric_key):
                 enc_file_data = enc_file.read()
                 sock.sendall(filename.encode() + b"\n" + enc_file_data)
             sock.close()
-            print(f"✅ Sent encrypted file '{filename}' to {ip}:{port}")
+            print(f"✅📨 Sent Encrypted File '{filename}' to {ip}:{port}")
     except FileNotFoundError:
         print(f"❌ File '{filename}' not found.")
         traceback.print_exc()
@@ -239,8 +263,6 @@ def send_file(ip, port, filename, symmetric_key):
         traceback.print_exc()
 
 def main():
-    global SYMMETRIC_KEY
-
     ip = get_ip()
     zeroconf = Zeroconf()
 
@@ -253,76 +275,17 @@ def main():
     )
     # register an mDNS service with the info we have defined
     zeroconf.register_service(info)
-    print(f"Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
+    print(f"👍 Registered {SERVICE_NAME} on {ip}:{SERVICE_PORT}")
 
     # starts TCP listener 
     threading.Thread(target=tcp_listener, args=(SERVICE_PORT,), daemon=True).start()
 
     listener = Listener()
     browser = ServiceBrowser(zeroconf, SERVICE_TYPE, listener)
-  
+
     try:
         while True:
-            # Display buffered messages before clearing the terminal
-            print("Peers:")
-            # for message in listener.messages:
-                # print(message)  # Print all messages stored in the buffer
-            
-            # listener.messages = []  # Clear messages after displaying them
-            
-            peers = list(listener.peers)
-            
-            for i, (name, peer_ip, peer_port) in enumerate(peers):
-                print(f"[{i}] {name} at {peer_ip}:{peer_port}")
-
-            if peers:
-                # input system for sending files. 
-                # select file and user to send file to
-                choice = input("Select a peer: ").strip()
-                if choice.isdigit():
-                    idx = int(choice)
-                    if 0 <= idx < len(peers):
-
-                        mode = int(input("1. Exchange Keys | 2. Send File: "))
-
-                        if mode == 1:
-                            peer_ip, peer_port = peers[idx][1], peers[idx][2]  # Get the chosen peer's IP and port
-                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                            sock.connect((peer_ip, peer_port))  # <-- Connect to the peer
-                            p, g, private_key, public_key = generate_dh_keypair()
-
-                            print('public_key (hex):', hex(public_key))
-                            public_key_hex = hex(public_key)  # Convert the public key to a hex string
-                            sock.sendall(json.dumps({'public_key': public_key_hex}).encode())
-
-
-                            print("Python is sending their public key:", public_key)
-                             # Send DH parameters to peer
-                            # sock.sendall(str(public_key).encode())
-                            # print(json.dumps({'p': p, 'g': g, 'public_key': public_key}).encode())
-                            server_data = sock.recv(4096)
-
-                            if server_data:
-                                print('server data:', server_data)
-                                server_data = json.loads(server_data.decode('utf-8'))  # Decode properly with UTF-8
-                                server_public_key = int(server_data['public_key'])
-                                shared_secret = compute_shared_secret(server_public_key, private_key, p)
-                                SYMMETRIC_KEY = derive_key(shared_secret) #! TODO: Use this for decryption
-                            else:
-                                print("No data received from the server.")
-
-                        elif mode == 2:
-                            filename = input("Enter the filename to send: ").strip()
-                            peer = peers[idx]
-                            if not(SYMMETRIC_KEY):
-                                print("Error: You must first exchange keys.")
-                                continue
-                            print("SYMMETRIC KEY: ", SYMMETRIC_KEY)
-                            print(f'Sending to peer|: {peer[1]} {peer[2]} {filename}')
-                            send_file(peer[1], peer[2], filename, SYMMETRIC_KEY)
-                        else:
-                            continue 
-
+            menu(listener)
     except KeyboardInterrupt:
         # shuts down with keyboard interrupt
         print("Shutting down...")
@@ -331,5 +294,106 @@ def main():
         zeroconf.unregister_service(info)
         zeroconf.close()
 
+def integer_input(text):
+    while True:
+        try:
+            menuItem = int(input(text))
+            return menuItem
+        except ValueError:
+            print("❌ Enter an integer.")
+
+def sha256_hash(filename):
+    with open(filename, 'rb', buffering=0) as f:
+        return hashlib.file_digest(f, 'sha256').hexdigest()
+
+def menu(listener: Listener):
+    def print_peers():
+        peers = list(listener.peers)
+        for i, (name, peer_ip, peer_port) in enumerate(peers):
+            print(f"[{i}] {name} at {peer_ip}:{peer_port}")
+        return peers
+
+    print("\nMenu:")
+    print("0. Peer List")
+    print("1. Key Verification/Transfer")
+    print("2. Send a File")
+    print("3. Add File to Share")
+    print("4. Display Shared Files")
+    print("5. Request Shared File List")
+    print("6. Request a Shared File")
+    menuItem = integer_input("Select an Option: ")
+
+    match menuItem:
+        case 0: # 0. Peer List
+            print_peers()
+        case 1: # 1. Key Verification
+            peers = print_peers()
+            peer_id = integer_input("Select a Peer for key verification: ")
+            
+            peer_ip, peer_port = peers[peer_id][1], peers[peer_id][2]  # Get the chosen peer's IP and port
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((peer_ip, peer_port))  # Connect to the peer
+            p, g, private_key, public_key = generate_dh_keypair()
+
+            public_key_hex = hex(public_key)  # Convert the public key to a hex string
+            sock.sendall(json.dumps({'public_key': public_key_hex}).encode())
+
+            print("📨 Python Sent Public Key:", public_key)
+
+            server_data = sock.recv(4096)
+
+            if server_data:
+               
+                server_data = json.loads(server_data.decode('utf-8'))  # Decode properly with UTF-8
+                server_public_key = int(server_data['public_key'])
+                shared_secret = compute_shared_secret(server_public_key, private_key, p)
+
+                key = derive_key(shared_secret)
+                print("🔑 Key Derived:", key)
+                KEYS[f"{peer_ip}"] = key
+            else:
+                print("❌ No data returned from server for verification of key.")
+        case 2: # 2. Send a File
+            peers = print_peers()
+            peer_id = integer_input("Select a Peer for file transfer: ")
+
+            peer_ip, peer_port = peers[peer_id][1], peers[peer_id][2]  # Get the chosen peer's IP and port
+            peer = peers[peer_id]
+
+            if not(f"{peer_ip}" in KEYS):
+                print("❌ You must exchange keys before file transfer (option 1)")
+
+            filename = input("Enter the filename to send: ").strip()
+            send_file(peer[1], peer[2], filename, KEYS[f"{peer_ip}"])
+        case 3: # 3. Add a file to share
+            filename = input("Enter the filename to share: ").strip()
+            if os.path.isfile(filename):
+                sha256 = sha256_hash(filename)
+                SHARED_FILES.append([filename, sha256])
+                print(f"🔗 Added {filename} ({sha256}) to the Shared List.")
+            else:
+                print(f"❌ {filename} does not exist.")
+        case 4: #4. Display shared files
+            print("Shared Files:")
+            for f in SHARED_FILES:
+                print(f"{f[0]}: {f[1]}")
+        case 5: # 5. Request Shared File List
+            peers = print_peers()
+            peer_id = integer_input("Select a Peer to Request  File List: ")
+            
+            peer_ip, peer_port = peers[peer_id][1], peers[peer_id][2]  # Get the chosen peer's IP and port
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((peer_ip, peer_port))  # Connect to the peer
+            sock.sendall(json.dumps({'request': 'file_list'}).encode())
+
+            data = sock.recv(4096)  # Adjust buffer size if necessary
+            if data:
+                # Decode the JSON response
+                response = json.loads(data.decode('utf-8'))
+                print("Received response:", response)
+            else:
+                print("No response received from the server.")
 if __name__ == "__main__":
     main()
