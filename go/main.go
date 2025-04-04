@@ -49,7 +49,8 @@ var (
 	g = big.NewInt(2)
 ) // Message buffer to store logs and predefined DH parameters
 
-var symmkeyGlobal []byte
+var keysMap map[string][]byte
+var sharedFiles [][]string
 
 func getLocalIP() (string, error) {
 	// List of network interfaces
@@ -330,112 +331,112 @@ func startFileReceiver(port int) {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
-	log.Println("Connection established with", conn.RemoteAddr())
 
-	// Diffie-Hellman Key Exchange
-	myPriv, myPub := generateDHKeyPair()
-	// conn.Write(myPub.Bytes())
-	fmt.Print(myPriv)
+	buffer := make([]byte, 4096) // Buffer to receive data
 
-	// Send public key in JSON format
-	response := map[string]string{
-		"public_key": myPub.String(), // Send key as a hexadecimal string
-	}
-
-	fmt.Printf("GO'S PUBLIC KEY", myPub, "\n\n")
-	fmt.Printf("GO'S PUBLIC KEY: %s\n", myPub.String())
-
-	jsonData, err := json.Marshal(response)
+	// Read incoming data
+	n, err := conn.Read(buffer)
 	if err != nil {
-		log.Println("Error encoding JSON:", err)
+		log.Println("Error reading data:", err)
 		return
 	}
 
-	// Send JSON to client
-	_, err = conn.Write(jsonData)
-	if err != nil {
-		log.Println("Error sending JSON:", err)
+	data := buffer[:n]
+
+	// Try to parse the data as JSON to check if it's a public key
+	var message map[string]string
+	err = json.Unmarshal(data, &message)
+	clientIP := conn.RemoteAddr().String()
+
+	if err == nil && message["public_key"] != "" {
+		// If it's a public key, store it
+		log.Printf("Received public key from %s: %s", clientIP, message["public_key"])
+
+		myPriv, myPub := generateDHKeyPair()
+
+		// Send GO's public key back to the other peer
+		response := map[string]string{
+			"public_key": myPub.String(), // SEnt key as a hexadecimal string
+		}
+
+		// Convert the response into JSON
+		jsonData, err := json.Marshal(response)
+		if err != nil {
+			log.Println("Error encoding JSON:", err)
+			return
+		}
+
+		_, err = conn.Write(jsonData)
+		if err != nil {
+			log.Println("Error sending public key:", err)
+			return
+		}
+
+		log.Printf("Sent public key to %s: %s", clientIP, myPub.String())
+
+		// publicKey, ok := new(big.Int).SetString(data.PublicKey[2:], 16) // Remove "0x" prefix and convert to big.Int
+
+		// Now compute the shared secret using the other peer's public key
+		peerPub, ok := new(big.Int).SetString(message["public_key"][2:], 16)
+		if !ok {
+			log.Println("Failed to convert peer's public key")
+			return
+		}
+
+		// Calculate shared secret using Diffie-Hellman formula
+		sharedSecret := computeSharedSecret(peerPub, myPriv)
+
+		// Derive symmetric key from the shared secret
+		symmKey, _, err := deriveKey(sharedSecret)
+		if err != nil {
+			log.Println("Error deriving symmetric key:", err)
+			return
+		}
+
+		// Store the symmetric key for future use
+		keysMap[clientIP] = symmKey
+		log.Printf("Symmetric key derived and stored for %s", clientIP)
 		return
 	}
-	log.Println("Sent JSON:", string(jsonData)) // Debugging output
-
-	// Receive their public key
-	theirPubBytes := make([]byte, 512)
-	n, err := conn.Read(theirPubBytes)
-	if err != nil {
-		log.Println("Failed to receive peer public key:", err)
-		return
+	if err == nil && message["request"] != "" {
+		// Return back a list of all files added to be shared
 	}
 
-	theirPubHex := string(theirPubBytes[:n]) // Convert bytes to a string
-	fmt.Printf("RAW RECEIVED DATA: %q\n", theirPubHex)
+	// If it's not a public key, assume it's a file
+	log.Println("Receiving file data from", clientIP)
 
-	fmt.Printf("Received Public Key (Hex): %s\n", theirPubHex) // Log the received hex string
-	// Struct to hold the received JSON data
-	var data struct {
-		PublicKey string `json:"public_key"`
-	}
-
-	// Unmarshal the JSON data into the struct
-	errr := json.Unmarshal([]byte(theirPubHex), &data)
-	if errr != nil {
-		log.Fatalf("Error unmarshalling JSON: %v", errr)
-	}
-
-	// Convert the hexadecimal string to a big.Int
-	publicKey, ok := new(big.Int).SetString(data.PublicKey[2:], 16) // Remove "0x" prefix and convert to big.Int
-	if !ok {
-		log.Fatalf("Error converting public key from hex")
-	}
-
-	// Print the public key as a big.Int (decimal format)
-	fmt.Printf("Public Key (BigInt): %s\n", publicKey.String())
-
-	// Compute shared secret
-	sharedSecret := computeSharedSecret(publicKey, myPriv)
-
-	// Derive symmetric key (this is a session key)
-	key, salt, err := deriveKey(sharedSecret)
-	symmkeyGlobal = key
-	if err != nil {
-		log.Println("Failed to derive key:", err)
-		return
-	}
-	symmkeyGlobal = key
-	log.Printf("Derived key: %x\n", key)
-	log.Printf("Using salt: %x\n", salt)
-	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
-
-	buffer := make([]byte, 4096)
-	n, err = conn.Read(buffer)
-	if err != nil && err != io.EOF {
-		log.Println("Failed to read file data:", err)
-		return
-	}
-	parts := string(buffer[:n])
-	fileParts := strings.SplitN(parts, "\n", 2)
-	if len(fileParts) < 2 {
+	// File data should be in the form of filename + newline + file data
+	parts := bytes.SplitN(data, []byte("\n"), 2)
+	if len(parts) < 2 {
 		log.Println("Invalid file format")
 		return
 	}
-	filename := fileParts[0]
-	filedata := []byte(fileParts[1])
-	log.Println("Received file: %s", filename)
 
-	f, err := os.Create("received_" + filename)
+	filename := string(parts[0])
+	filedata := parts[1]
+
+	// Save the file data to disk
+	file, err := os.Create("received_" + filename)
 	if err != nil {
-		log.Println("Failed to create file:", err)
+		log.Println("Error creating file:", err)
 		return
 	}
-	defer f.Close()
-	_, err = f.Write(filedata)
+	defer file.Close()
+
+	_, err = file.Write(filedata)
 	if err != nil {
-		log.Println("Failed to write file:", err)
+		log.Println("Error writing file:", err)
 		return
 	}
 
-	// Log success and close the connection
-	log.Printf("✅|Received file '%s' from %s", filename, conn.RemoteAddr().String())
+	// Decrypt the file using the symmetric key
+	if keysMap[clientIP] == nil {
+		log.Println("No symmetric key available for decryption")
+		return
+	}
+
+	// Decrypt the file
+	decryptFile(keysMap[clientIP], "received_"+filename)
 }
 
 func discoverServices() {
@@ -616,9 +617,33 @@ func menu() {
 			fmt.Printf("📁 Enter the Filename to send to %s:%d: ", peerIP, peerPort)
 			var filename string
 			fmt.Scan(&filename)
-			sendFile(peerIP, peerPort, filename, symmkeyGlobal)
-		case 3:
-			fmt.Println("You selected Option 3")
+			sendFile(peerIP, peerPort, filename, keysMap[peerIP])
+		case 3: // 3. Add a file to share
+			fmt.Printf("📁 Enter the Filename to share: ")
+			var filename string
+			fmt.Scan(&filename)
+
+			file, err := os.Open(filename)
+			if err != nil {
+				fmt.Errorf("failed to open file: %w", err)
+				return
+			}
+			defer file.Close()
+
+			// Create a new SHA-256 hash object
+			hash := sha256.New()
+
+			// Copy the file's content into the hash object
+			_, err = io.Copy(hash, file)
+			if err != nil {
+				fmt.Errorf("failed to copy file content to hash: %w", err)
+				return
+			}
+			hexString := fmt.Sprintf("%x", hash.Sum(nil))
+			fileAdd := []string{filename, hexString}
+			sharedFiles = append(sharedFiles, fileAdd)
+			fmt.Printf("📁 Added to shared list: %s (%s)", filename, hexString)
+			hash.Sum(nil)
 		case 4:
 			fmt.Println("You selected Option 4")
 		case 5:
@@ -634,6 +659,7 @@ func menu() {
 }
 
 func main() {
+	keysMap = make(map[string][]byte)
 	// Shutdown handling
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -648,33 +674,5 @@ func main() {
 	// Start listening for incoming file transfers
 	go startFileReceiver(servicePort)
 
-	// Re-run the searcher every 10 seconds
-	// ticker := time.NewTicker(10 * time.Second)
-	// defer ticker.Stop()
-
-	// Discover services
-	// go discoverServices()
-
 	menu()
-
-	// NEED TO ADD:
-	// give user 2 options, either select peer to send file to or decrypt file
-	// if user selects decrypt file, they will enter file name to decrypt
-
-	// Allow user to select a peer and send a file
-	choice := -1
-	fmt.Print("\nSelect a peer to send a file to (enter number): ")
-	fmt.Scan(&choice)
-	if choice >= 0 && choice < len(peers) {
-		peer := peers[choice]
-		peerIP := peer["IP"].(string)
-		peerPort := peer["Port"].(int)
-		fmt.Printf("📁 Enter the Filename to send to %s:%d: ", peerIP, peerPort)
-		var filename string
-		fmt.Scan(&filename)
-		fmt.Print("symmkeyglobal: ", symmkeyGlobal)
-		sendFile(peerIP, peerPort, filename, symmkeyGlobal)
-	} else {
-		log.Println("❌ Invalid peer selection")
-	}
 }

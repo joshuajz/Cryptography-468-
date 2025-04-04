@@ -384,6 +384,10 @@ def integer_input(text):
         except ValueError:
             print("❌ Enter an integer.")
 
+def sha256_hash(filename):
+    with open(filename, 'rb', buffering=0) as f:
+        return hashlib.file_digest(f, 'sha256').hexdigest()
+
 def menu(listener: Listener):
     def print_peers():
         peers = list(listener.peers)
@@ -397,7 +401,8 @@ def menu(listener: Listener):
     print("2. Send a File")
     print("3. Add File to Share")
     print("4. Display Shared Files")
-    print("5. Request a Shared File")
+    print("5. Request Shared File List")
+    print("6. Request a Shared File")
     menuItem = integer_input("Select an Option: ")
 
     match menuItem:
@@ -446,14 +451,25 @@ def menu(listener: Listener):
         case 3: # 3. Add a file to share
             filename = input("Enter the filename to share: ").strip()
             if os.path.isfile(filename):
-                SHARED_FILES.append(filename)
-                print(f"🔗 Added {filename} to the Shared List.")
+                sha256 = sha256_hash(filename)
+                SHARED_FILES.append([filename, sha256])
+                print(f"🔗 Added {filename} ({sha256}) to the Shared List.")
             else:
                 print(f"❌ {filename} does not exist.")
         case 4: #4. Display shared files
             print("Shared Files:")
             for f in SHARED_FILES:
-                print(f"- {f}")
+                print(f"{f[0]}: {f[1]}")
+        case 5: # 5. Request Shared File List
+            # ! TODO
+            peers = print_peers()
+            peer_id = integer_input("Select a Peer to Request  File List: ")
+            
+            peer_ip, peer_port = peers[peer_id][1], peers[peer_id][2]  # Get the chosen peer's IP and port
+
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((peer_ip, peer_port))  # Connect to the peer
+            sock.sendall(json.dumps({'request': 'file_list'}).encode())
 
 if __name__ == "__main__":
     main()
