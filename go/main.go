@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -22,7 +23,7 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
-	//"golang.org/x/crypto/scrypt"
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -107,6 +108,24 @@ func generateDHKeyPair() (*big.Int, *big.Int) {
 	priv, _ := rand.Int(rand.Reader, p)
 	pub := new(big.Int).Exp(g, priv, p)
 	return priv, pub
+}
+
+func GenerateEphemeralDHKeyPair() (privKey, pubKey []byte, err error) {
+	privKey = make([]byte, 32)
+	_, err = rand.Read(privKey) // Generate a new random private key
+	if err != nil {
+		return nil, nil, err
+	}
+	privKey[0] &= 248
+	privKey[31] &= 127
+	privKey[31] |= 64
+
+	pubKey, err = curve25519.X25519(privKey, curve25519.Basepoint)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return privKey, pubKey, nil
 }
 
 func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
@@ -333,17 +352,25 @@ func handleConnection(conn net.Conn) {
 	log.Println("Connection established with", conn.RemoteAddr())
 
 	// Diffie-Hellman Key Exchange
-	myPriv, myPub := generateDHKeyPair()
-	// conn.Write(myPub.Bytes())
+	myPriv, myPub, err := GenerateEphemeralDHKeyPair()
+	if err != nil {
+		log.Println("Error generating ephemeral key pair:", err)
+		return
+	}
+
 	fmt.Print(myPriv)
 
 	// Send public key in JSON format
+	// response := map[string]string{
+	// 	"public_key": myPub.String(), // Send key as a hexadecimal string
+	// }
+
+	// Send public key in JSON format
 	response := map[string]string{
-		"public_key": myPub.String(), // Send key as a hexadecimal string
+		"public_key": hex.EncodeToString(myPub),
 	}
 
 	fmt.Printf("GO'S PUBLIC KEY", myPub, "\n\n")
-	fmt.Printf("GO'S PUBLIC KEY: %s\n", myPub.String())
 
 	jsonData, err := json.Marshal(response)
 	if err != nil {
@@ -392,18 +419,37 @@ func handleConnection(conn net.Conn) {
 	fmt.Printf("Public Key (BigInt): %s\n", publicKey.String())
 
 	// Compute shared secret
-	sharedSecret := computeSharedSecret(publicKey, myPriv)
+	//sharedSecret := computeSharedSecret(publicKey, myPriv)
+	// Compute shared secret
 
-	// Derive symmetric key (this is a session key)
-	key, salt, err := deriveKey(sharedSecret)
-	symmkeyGlobal = key
+	// Convert received public key from hex
+	peerPub, err := hex.DecodeString(data.PublicKey)
 	if err != nil {
-		log.Println("Failed to derive key:", err)
+		log.Println("Failed to decode peer's public key:", err)
 		return
 	}
-	symmkeyGlobal = key
-	log.Printf("Derived key: %x\n", key)
-	log.Printf("Using salt: %x\n", salt)
+
+	sharedSecret, err := curve25519.X25519(myPriv, peerPub)
+	if err != nil {
+		log.Println("Failed to compute shared secret:", err)
+		return
+	}
+	log.Println("Derived Shared Secret:", hex.EncodeToString(sharedSecret))
+
+	// Derive symmetric key (this is a session key)
+	// key, salt, err := deriveKey(sharedSecret)
+	// symmkeyGlobal = key
+	// if err != nil {
+	// 	log.Println("Failed to derive key:", err)
+	// 	return
+	// }
+
+	// Derive symmetric encryption key
+	sharedKey := sha256.Sum256(sharedSecret) // Use SHA-256 to derive key
+	log.Println("Symmetric Key:", hex.EncodeToString(sharedKey[:]))
+
+	//symmkeyGlobal = sharedKey
+	log.Printf("Derived key: %x\n", sharedKey)
 	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
 
 	buffer := make([]byte, 4096)

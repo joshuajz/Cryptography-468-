@@ -20,8 +20,9 @@ from hashlib import sha256 as sh
 from Crypto.Random.random import getrandbits
 from hashlib import sha256
 from Crypto.Random import get_random_bytes
-from Crypto.Protocol.KDF import scrypt
 from Crypto.Util.number import getPrime, inverse
+import nacl.bindings  # Using X25519 for DHKE
+
 
 # define port number, service type, and service name
 SERVICE_TYPE = "_ping._tcp.local."
@@ -34,39 +35,48 @@ KEYS = {}
 # Shared Files
 SHARED_FILES = []
 
-def generate_dh_keypair():
-    # Standard 2048-bit safe prime for DHKE (can be changed to a larger prime if needed)
-    p = int("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
-            "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
-            "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"
-            "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
-            "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"
-            "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"
-            "83655D23DCA3AD961C62F356208552BB9ED529077096966D"
-            "670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
-    g = 2
-    private_key = getrandbits(2048) % p
-    public_key = pow(g, private_key, p)
-    return p, g, private_key, public_key
+# def generate_dh_keypair():
+#     # Standard 2048-bit safe prime for DHKE (can be changed to a larger prime if needed)
+#     p = int("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
+#             "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
+#             "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"
+#             "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+#             "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"
+#             "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"
+#             "83655D23DCA3AD961C62F356208552BB9ED529077096966D"
+#             "670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
+#     g = 2
+#     private_key = getrandbits(2048) % p
+#     public_key = pow(g, private_key, p)
+#     return p, g, private_key, public_key
 
-def compute_shared_secret(peer_public_key, private_key, p):
-    shared_secret = pow(peer_public_key, private_key, p)
-    shared_secret_bytes = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
-
-
-    return shared_secret_bytes
-
-def derive_key(shared_secret):
-    salt = bytes(16)  # 16-byte salt (same as Go)
+def generate_ephemeral_keypair():
+    """Generate a new ephemeral DH key pair using X25519"""
+    priv_key = os.urandom(32)  # Generate random private key
+    pub_key = nacl.bindings.crypto_scalarmult_base(priv_key)  # Compute public key
+    return priv_key, pub_key
 
 
-    key = hashlib.pbkdf2_hmac('sha256', shared_secret, salt, 100000, dklen=32)  # Derive 32-byte key
-    print("Python Derived Key:", key.hex())
-    print("PYTHON SALT: ", salt)
-    print("PYTHON SHARED SECRET: ", shared_secret.hex())
-    print("PYTHON DERIVED KEY: ", key.hex())
+# def compute_shared_secret(peer_public_key, private_key, p):
+#     shared_secret = pow(peer_public_key, private_key, p)
+#     shared_secret_bytes = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
+#     return shared_secret_bytes
 
-    return key
+def derive_shared_secret(my_priv_key, peer_pub_key):
+    """Compute the shared secret using X25519"""
+    return nacl.bindings.crypto_scalarmult(my_priv_key, peer_pub_key)
+
+# def derive_key(shared_secret):
+#     salt = bytes(16)  # 16-byte salt (same as Go)
+
+
+    # key = hashlib.pbkdf2_hmac('sha256', shared_secret, salt, 100000, dklen=32)  # Derive 32-byte key
+    # print("Python Derived Key:", key.hex())
+    # print("PYTHON SALT: ", salt)
+    # print("PYTHON SHARED SECRET: ", shared_secret.hex())
+    # print("PYTHON DERIVED KEY: ", key.hex())
+
+    # return key
 
 def calculate_hmac(key, data):
     # Calculate HMAC using SHA256
@@ -171,15 +181,22 @@ def handle_client_connection(connection, address):
                 print(f"🔑 Received a public key from {address[0]}:{address[1]}: {message['public_key']}")
 
                 # Store the symmetric key
-                p, g, private_key, public_key = generate_dh_keypair()
+               # p, g, private_key, public_key = generate_dh_keypair()
+                private_key, public_key = generate_ephemeral_keypair()
                 print('public key:', message["public_key"])
-                shared_secret = compute_shared_secret(int(message['public_key']), private_key, p)
+                shared_secret = derive_shared_secret(private_key, message['public key'])
+                print(f"Derived Shared Secret: {shared_secret.hex()}")
+
+               # shared_secret = compute_shared_secret(int(message['public_key']), priate_key, p)
                 # shared_secret = compute_shared_secret(private_key, message['public_key'], p)
-                derived_key = derive_key(shared_secret)
+                # derived_key = derive_key(shared_secret)
+
+                derived_key = hashlib.sha256(shared_secret).digest()
+                print(f"Symmetric Key: {derived_key.hex()}")
                 KEYS[f"{address[0]}"] = derived_key
 
                 # Send our public key back to the client (DH exchange)
-                public_key_hex = hex(public_key)  # Convert the public key to a hex string
+                public_key_hex = public_key.hex()  # Convert the public key to a hex string
                 connection.sendall(json.dumps({'public_key': public_key_hex}).encode())
                 print("📨 Sent Public Key to client:", public_key)
                 return
@@ -411,9 +428,9 @@ def menu(listener: Listener):
             
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((peer_ip, peer_port))  # Connect to the peer
-            p, g, private_key, public_key = generate_dh_keypair()
+            private_key, public_key = generate_ephemeral_keypair()
 
-            public_key_hex = hex(public_key)  # Convert the public key to a hex string
+            public_key_hex = public_key.hex()  # Convert the public key to a hex string
             sock.sendall(json.dumps({'public_key': public_key_hex}).encode())
 
             print("📨 Python Sent Public Key:", public_key)
@@ -423,11 +440,11 @@ def menu(listener: Listener):
             if server_data:
                 print('✉️ Other Server Provided Data:', server_data)
                 server_data = json.loads(server_data.decode('utf-8'))  # Decode properly with UTF-8
-                server_public_key = int(server_data['public_key'])
-                shared_secret = compute_shared_secret(server_public_key, private_key, p)
-
-                key = derive_key(shared_secret)
-                print("🔑 Key Derived:", key)
+                server_public_key = server_data['public_key']
+                shared_secret = derive_shared_secret(private_key,bytes.fromhex(server_public_key) )                
+                print("SHARED SECRET: ", shared_secret.hex())
+                key = hashlib.sha256(shared_secret).digest()
+                print(f"Symmetric Key: {key.hex()}")
                 KEYS[f"{peer_ip}"] = key
             else:
                 print("❌ No data returned from server for verification of key.")
