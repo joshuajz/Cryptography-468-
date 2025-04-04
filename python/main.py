@@ -53,7 +53,6 @@ def compute_shared_secret(peer_public_key, private_key, p):
     shared_secret = pow(peer_public_key, private_key, p)
     shared_secret_bytes = shared_secret.to_bytes((shared_secret.bit_length() + 7) // 8, 'big')
 
-
     return shared_secret_bytes
 
 def derive_key(shared_secret):
@@ -74,9 +73,6 @@ def calculate_hmac(key, data):
     print("Python Key Length:", len(key))
     hmac_obj = hmac.new(key, data, SHA256)
     return hmac_obj.digest()
-
-
-
 
 def encrypt_file(key, filename):
     # CHANGE TO FIXED OR COMMUNICATED
@@ -102,10 +98,6 @@ def encrypt_file(key, filename):
     
     print(f"🔒 Encrypted File As {filename}.enc")
 
-
-
-
-
 def decrypt_file(sym_key, filename):
     print("DECRYPT FILE SYMMETRIC KEY:", sym_key, "/n")
     print("Decrypting the file")
@@ -123,8 +115,6 @@ def decrypt_file(sym_key, filename):
     salt_iv_ciphertext = salt + iv + ciphertext
 
     print("SALTIVCIPHER: ", salt_iv_ciphertext.hex())
-
-
 
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, salt_iv_ciphertext):
@@ -149,10 +139,11 @@ def decrypt_file(sym_key, filename):
     
     print(f"Decrypted file saved as {filename[:-4]}.dec")
 
-
 def handle_client_connection(connection, address):
+    print(f"Connection from {address[0]}:{address[1]}")
+    
     buffer = b""
-
+    print('buffer:', buffer)
     while True:
         chunk = connection.recv(4096)
 
@@ -183,8 +174,9 @@ def handle_client_connection(connection, address):
                 connection.sendall(json.dumps({'public_key': public_key_hex}).encode())
                 print("📨 Sent Public Key to client:", public_key)
                 return
+            elif "files" in message:
+                print('message', message)
         except:
-            print("JSON DECODE ERROR TRIGGER")
             if b"\n" in buffer:
                 filename, filedata = buffer.split(b"\n", 1)
                 filename = filename.decode(errors="ignore")  # Handle any invalid UTF-8 characters
@@ -202,7 +194,6 @@ def handle_client_connection(connection, address):
                 else:
                     print(f"❌🛡️ No symmetric key found for {address[0]}, unable to decrypt the file.")
 
-
 def tcp_listener(port=SERVICE_PORT):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', port))
@@ -211,80 +202,9 @@ def tcp_listener(port=SERVICE_PORT):
 
     while True:
         conn, addr = sock.accept()
+        print("Calling handle connection")
         handle_client_connection(conn, addr)
         conn.close()
-    
-    # Set up TCP listening port
-    # sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # sock.bind(('', port))
-    # sock.listen(1)
-    # print(f"👍 Listening for TCP file transfers on port {port}.")
-
-    # while True:
-    #     # Accept connection and check for file transfer
-    #     conn, addr = sock.accept()
-    #     with conn:
-    #         print(f"Connection from {addr}")
-    #         buffer = b""
-
-    #         while True:
-    #             chunk = conn.recv(4096)
-    #             if not chunk:
-    #                 break  # No more data received, close the connection
-
-    #             buffer += chunk
-
-    #             try:
-    #                 # Try to load the chunk as JSON to check for a public key
-    #                 # Attempt to decode the buffer only if it's likely JSON data
-    #                 try:
-    #                     chunkJSON = json.loads(buffer)
-    #                     if 'public_key' in chunkJSON:
-    #                         print(f"🔑 Received a public key from {addr[0]}:{addr[1]}: {chunkJSON['public_key']}")
-
-    #                         # Derive the symmetric key from the public key
-    #                         shared_secret = compute_shared_secret(private_key, chunkJSON['public_key'])
-    #                         derived_key = derive_key(shared_secret)
-    #                         KEYS[f"{addr[0]}"] = derived_key
-
-    #                         # Send our public key back to the client (DH exchange)
-    #                         p, g, private_key, public_key = generate_dh_keypair()
-    #                         public_key_hex = hex(public_key)  # Convert the public key to a hex string
-    #                         conn.sendall(json.dumps({'public_key': public_key_hex}).encode())
-    #                         print("📨 Sent Public Key to client:", public_key)
-
-    #                         buffer = b""  # Reset the buffer after processing the JSON message
-    #                         continue  # Proceed to the next iteration to listen for more data
-    #                 except json.JSONDecodeError:
-    #                     # If it's not JSON, we'll treat it as file data
-    #                     pass
-
-    #                 # If buffer contains a newline, assume it's a file transfer
-    #                 if b"\n" in buffer:
-    #                     filename, filedata = buffer.split(b"\n", 1)
-    #                     filename = filename.decode(errors="ignore")  # Ignore invalid UTF-8 characters
-
-    #                     # Save the file received
-    #                     with open(f"received_{filename}", "wb") as f:
-    #                         f.write(filedata)
-
-    #                     # Check if we have a symmetric key for this address
-    #                     if f"{addr[0]}" in KEYS:
-    #                         sym_key = KEYS[f"{addr[0]}"]
-    #                         if sym_key:
-    #                             # Decrypt the file using the symmetric key
-    #                             print(f"Decrypting file '{filename}' using symmetric key.")
-    #                             decrypt_file(sym_key, f"received_{filename}")
-    #                             print(f"✅ Received and processed file '{filename}' from {addr}")
-    #                         else:
-    #                             print(f"❌ No symmetric key available for {addr}. File decryption failed.")
-    #                     else:
-    #                         print(f"❌ No symmetric key found for {addr}. Unable to decrypt the file.")
-
-    #                     buffer = b""  # Reset the buffer after processing the file
-    #             except Exception as e:
-    #                 print(f"Error processing buffer: {e}")
-
 
 def get_ip():
     # get IP connections
@@ -461,7 +381,6 @@ def menu(listener: Listener):
             for f in SHARED_FILES:
                 print(f"{f[0]}: {f[1]}")
         case 5: # 5. Request Shared File List
-            # ! TODO
             peers = print_peers()
             peer_id = integer_input("Select a Peer to Request  File List: ")
             
@@ -471,5 +390,12 @@ def menu(listener: Listener):
             sock.connect((peer_ip, peer_port))  # Connect to the peer
             sock.sendall(json.dumps({'request': 'file_list'}).encode())
 
+            data = sock.recv(4096)  # Adjust buffer size if necessary
+            if data:
+                # Decode the JSON response
+                response = json.loads(data.decode('utf-8'))
+                print("Received response:", response)
+            else:
+                print("No response received from the server.")
 if __name__ == "__main__":
     main()

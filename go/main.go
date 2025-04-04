@@ -325,6 +325,7 @@ func startFileReceiver(port int) {
 			continue
 		}
 		// Asynchronously handle each file transfer
+		fmt.Println("CALLING HANDLE CONNECTIONS FUNCTION")
 		go handleConnection(conn)
 	}
 }
@@ -347,6 +348,9 @@ func handleConnection(conn net.Conn) {
 	var message map[string]string
 	err = json.Unmarshal(data, &message)
 	clientIP := conn.RemoteAddr().String()
+
+	fmt.Printf("Parsed JSON: %s\n\n", message)
+	fmt.Printf("Does the value exist?: %s", message["request"])
 
 	if err == nil && message["public_key"] != "" {
 		// If it's a public key, store it
@@ -398,8 +402,33 @@ func handleConnection(conn net.Conn) {
 		log.Printf("Symmetric key derived and stored for %s", clientIP)
 		return
 	}
-	if err == nil && message["request"] != "" {
+	if err == nil && message["request"] == "file_list" {
 		// Return back a list of all files added to be shared
+		response := map[string]interface{}{
+			"files": sharedFiles,
+		}
+
+		jsonData, err := json.Marshal(response)
+		if err != nil {
+			log.Println("Error encoding JSON:", err)
+			return
+		}
+
+		fmt.Printf("JSON DATA: %s, %v", string(jsonData), jsonData)
+
+		_, err = conn.Write(jsonData)
+		if err != nil {
+			log.Println("Error sending file list:", err)
+			return
+		}
+
+		_, err = conn.Write(jsonData)
+		if err != nil {
+			log.Println("Error sending file list:", err)
+			return
+		}
+		fmt.Printf("\nSuccessfully wrote jsondata\n")
+		return
 	}
 
 	// If it's not a public key, assume it's a file
@@ -555,8 +584,9 @@ func menu() {
 		fmt.Println("2. Send a File")
 		fmt.Println("3. Add File to Share")
 		fmt.Println("4. Display Shared Files")
-		fmt.Println("5. Request a Shared File")
-		fmt.Println("6. Exit")
+		fmt.Println("5. Request Shared File List")
+		fmt.Println("6. Request a Shared File")
+		fmt.Println("7. Exit")
 
 		var choice int
 		_, err := fmt.Scan(&choice)
