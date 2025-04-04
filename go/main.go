@@ -24,7 +24,6 @@ import (
 
 	"github.com/grandcat/zeroconf"
 	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -36,19 +35,6 @@ const (
 )
 
 var peers []map[string]interface{} // List of dictionaries (maps) to store peer information
-var (
-	// Predefined DH parameters
-	p, _ = new(big.Int).SetString(
-		"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
-			"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
-			"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
-			"E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
-			"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"+
-			"C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"+
-			"83655D23DCA3AD961C62F356208552BB9ED529077096966D"+
-			"670C354E4ABC9804F1746C08CA237327FFFFFFFFFFFFFFFF", 16)
-	g = big.NewInt(2)
-) // Message buffer to store logs and predefined DH parameters
 
 var symmkeyGlobal []byte
 
@@ -104,12 +90,6 @@ func startResponder() (*zeroconf.Server, error) {
 	return server, nil
 }
 
-func generateDHKeyPair() (*big.Int, *big.Int) {
-	priv, _ := rand.Int(rand.Reader, p)
-	pub := new(big.Int).Exp(g, priv, p)
-	return priv, pub
-}
-
 func GenerateEphemeralDHKeyPair() (privKey, pubKey []byte, err error) {
 	privKey = make([]byte, 32)
 	_, err = rand.Read(privKey) // Generate a new random private key
@@ -126,28 +106,6 @@ func GenerateEphemeralDHKeyPair() (privKey, pubKey []byte, err error) {
 	}
 
 	return privKey, pubKey, nil
-}
-
-func computeSharedSecret(theirPub, myPriv *big.Int) []byte {
-	// Calculate the shared secret using Diffie-Hellman
-	shared := new(big.Int).Exp(theirPub, myPriv, p)
-
-	// Return the raw bytes of the shared secret (no hashing)
-	return shared.Bytes()
-}
-
-// deriveKey derives a cryptographic key from the shared secret using scrypt
-func deriveKey(sharedSecret []byte) ([]byte, []byte, error) {
-	// Generate a random salt (16 bytes)
-	salt := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	key := pbkdf2.Key(sharedSecret, salt, 100000, 32, sha256.New)
-	fmt.Printf("Go Derived Key: %x\n", key)
-
-	fmt.Printf("GO SHARED SECRET: %x\n", sharedSecret)
-	fmt.Printf("GO DERIVED KEY: %x\n", key)
-
-	return key, salt, nil
 }
 
 // PKCS7 padding function (same as the one used in Python's Crypto.Util.Padding)
@@ -230,11 +188,7 @@ func encryptFile(key []byte, filename string) error {
 	fmt.Printf("IV: %s\n", hex.EncodeToString(iv))
 	fmt.Printf("HMAC Tag: %s\n", hex.EncodeToString(hmacTag))
 	fmt.Printf("Ciphertext: %s\n", hex.EncodeToString(ciphertext))
-	//fmt.Printf("Symmetric Key: %s\n", key)
 	fmt.Printf("Derived Key in Go: %x\n", key)
-
-	//fmt.Printf("Encrypted File Information:\nsalt: %s\niv: %s\nhmacTag: %s\nciphertext: %s\n", salt, iv, hmacTag, ciphertext)
-
 	log.Printf("Encrypted file saved as %s\n", encFile)
 	return nil
 }
@@ -361,16 +315,13 @@ func handleConnection(conn net.Conn) {
 	fmt.Print(myPriv)
 
 	// Send public key in JSON format
-	// response := map[string]string{
-	// 	"public_key": myPub.String(), // Send key as a hexadecimal string
-	// }
-
-	// Send public key in JSON format
 	response := map[string]string{
 		"public_key": hex.EncodeToString(myPub),
 	}
+	fmt.Printf("Sending public key (Hex): %s\n", hex.EncodeToString(myPub))
 
-	fmt.Printf("GO'S PUBLIC KEY", myPub, "\n\n")
+	fmt.Print("RESPONSE: ", response)
+	fmt.Printf("GO'S PUBLIC KEY %x\n", hex.EncodeToString(myPub))
 
 	jsonData, err := json.Marshal(response)
 	if err != nil {
@@ -418,10 +369,6 @@ func handleConnection(conn net.Conn) {
 	// Print the public key as a big.Int (decimal format)
 	fmt.Printf("Public Key (BigInt): %s\n", publicKey.String())
 
-	// Compute shared secret
-	//sharedSecret := computeSharedSecret(publicKey, myPriv)
-	// Compute shared secret
-
 	// Convert received public key from hex
 	peerPub, err := hex.DecodeString(data.PublicKey)
 	if err != nil {
@@ -436,20 +383,12 @@ func handleConnection(conn net.Conn) {
 	}
 	log.Println("Derived Shared Secret:", hex.EncodeToString(sharedSecret))
 
-	// Derive symmetric key (this is a session key)
-	// key, salt, err := deriveKey(sharedSecret)
-	// symmkeyGlobal = key
-	// if err != nil {
-	// 	log.Println("Failed to derive key:", err)
-	// 	return
-	// }
-
 	// Derive symmetric encryption key
 	sharedKey := sha256.Sum256(sharedSecret) // Use SHA-256 to derive key
+
 	log.Println("Symmetric Key:", hex.EncodeToString(sharedKey[:]))
 
 	//symmkeyGlobal = sharedKey
-	log.Printf("Derived key: %x\n", sharedKey)
 	log.Printf("🔑 Secure key derived with %s\n", conn.RemoteAddr())
 
 	buffer := make([]byte, 4096)
@@ -632,9 +571,15 @@ func menu() {
 			}
 			defer conn.Close()
 
-			_, myPub := generateDHKeyPair()
+			_, myPub, err := GenerateEphemeralDHKeyPair()
+			fmt.Print("MYPUB: ", myPub)
+			if err != nil {
+				log.Println("Error generating DH key pair:", err)
+				return
+			}
+
 			response := map[string]string{
-				"public_key": myPub.String(), // Send the public key as a string (hex or decimal)
+				"public_key": hex.EncodeToString(myPub), // Send the public key as a string (hex or decima
 			}
 
 			jsonData, err := json.Marshal(response)
@@ -649,7 +594,7 @@ func menu() {
 				return
 			}
 
-			log.Println("Sent public key:", myPub.String())
+			log.Println("Sent public key:", myPub)
 
 			// Handle receiving the peer's public key
 			handleConnection(conn)
@@ -694,18 +639,7 @@ func main() {
 	// Start listening for incoming file transfers
 	go startFileReceiver(servicePort)
 
-	// Re-run the searcher every 10 seconds
-	// ticker := time.NewTicker(10 * time.Second)
-	// defer ticker.Stop()
-
-	// Discover services
-	// go discoverServices()
-
 	menu()
-
-	// NEED TO ADD:
-	// give user 2 options, either select peer to send file to or decrypt file
-	// if user selects decrypt file, they will enter file name to decrypt
 
 	// Allow user to select a peer and send a file
 	choice := -1
