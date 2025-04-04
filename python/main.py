@@ -60,8 +60,7 @@ def derive_key(shared_secret):
 
 
     key = hashlib.pbkdf2_hmac('sha256', shared_secret, salt, 100000, dklen=32)  # Derive 32-byte key
-    print("Python Derived Key:", key.hex())
-    print("PYTHON SALT: ", salt)
+
     print("PYTHON SHARED SECRET: ", shared_secret.hex())
     print("PYTHON DERIVED KEY: ", key.hex())
 
@@ -99,7 +98,7 @@ def encrypt_file(key, filename):
     print(f"🔒 Encrypted File As {filename}.enc")
 
 def decrypt_file(sym_key, filename):
-    print("DECRYPT FILE SYMMETRIC KEY:", sym_key, "/n")
+
     print("Decrypting the file")
     with open(filename, 'rb') as f:
         data = f.read()
@@ -114,15 +113,14 @@ def decrypt_file(sym_key, filename):
     hmac_tag = data[-HMAC_SIZE:]  # Extract hmac
     salt_iv_ciphertext = salt + iv + ciphertext
 
-    print("SALTIVCIPHER: ", salt_iv_ciphertext.hex())
+
 
     # Verify HMAC tag
     if hmac_tag != calculate_hmac(sym_key, salt_iv_ciphertext):
 
-        print("DATA RETREIVED FROM GO: ", data.hex())
-        print("HMAC TAG: ", hmac_tag.hex())
+
         check = calculate_hmac(sym_key, salt_iv_ciphertext)
-        print(" Python Calculated HMAC: ", check.hex())
+
         print("HMAC verification failed!")
         return
     else:
@@ -154,9 +152,9 @@ def handle_client_connection(connection, address):
 
         # Checking if the message is a key
         try:
-            print('b4 msg load')
+         
             message = json.loads(buffer)
-            print('after msg load')
+      
             if "public_key" in message:
                 public_key = message["public_key"]
                 print(f"🔑 Received a public key from {address[0]}:{address[1]}: {message['public_key']}")
@@ -346,7 +344,7 @@ def menu(listener: Listener):
             server_data = sock.recv(4096)
 
             if server_data:
-                print('✉️ Other Server Provided Data:', server_data)
+               
                 server_data = json.loads(server_data.decode('utf-8'))  # Decode properly with UTF-8
                 server_public_key = int(server_data['public_key'])
                 shared_secret = compute_shared_secret(server_public_key, private_key, p)
